@@ -1,0 +1,64 @@
+syntax = "proto3";
+
+import "google/protobuf/empty.proto";
+
+package raid_filesys;
+
+service Filesys {
+  rpc ReadBlocks(ReadBlocksArgs) returns (ReadBlocksReply) {}
+
+  rpc WriteBlocks(WriteBlocksArgs) returns (google.protobuf.Empty) {}
+
+  rpc GetFileList(google.protobuf.Empty) returns (stream GetFileListReply) {}
+
+  rpc GetUpdateLog(GetUpdateLogArgs) returns (stream GetUpdateLogReply) {}
+
+  rpc HeartBeat(google.protobuf.Empty) returns (stream HeartBeatReply) {}
+}
+
+message ReadBlocksArgs {
+  string file_name = 1;
+  uint32 stripe_offset = 2;
+  uint32 num_stripes = 3;
+  optional uint32 version = 4;
+}
+
+message ReadBlocksReply {
+  bytes block_data = 1;
+  uint32 version = 2;
+}
+
+message WriteBlocksArgs {
+  string file_name = 1;
+  uint32 stripe_offset = 2;
+  uint32 num_strips = 3;
+  uint32 version = 4;
+  bytes block_data = 5;
+}
+
+
+message GetFileListReply {
+  string file_name = 1;
+  MetaData metadata = 2;
+  uint32 version = 3;
+}
+
+message MetaData {
+  int32 dummy = 1;
+}
+
+message GetUpdateLogArgs {
+  string file_name = 1;
+  uint32 after_version = 2;
+}
+
+message GetUpdateLogReply {
+  uint32 version = 1;
+  uint32 stripe_offset = 2;
+  uint32 num_stripes = 3;
+}
+
+message HeartBeatReply {
+  string file_name = 1;
+  uint32 version = 2;
+}
