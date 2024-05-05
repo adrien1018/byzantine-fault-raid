@@ -2,7 +2,7 @@ syntax = "proto3";
 
 import "google/protobuf/empty.proto";
 
-package raid_filesys;
+package filesys;
 
 service Filesys {
   rpc ReadBlocks(ReadBlocksArgs) returns (ReadBlocksReply) {}

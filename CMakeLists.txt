@@ -1,7 +1,7 @@
-cmake_minimum_required(VERSION 3.8)
+cmake_minimum_required(VERSION 3.12)
 project(Filesys C CXX)
 
-SET(CMAKE_CXX_FLAGS "-g -Wall -Werror -std=c++17")
+SET(CMAKE_CXX_FLAGS "-g -Wall -std=c++17")
 
 include(common.cmake)
 
@@ -26,6 +26,13 @@ add_custom_command(
 
 # Include generated *.pb.h files
 include_directories("${CMAKE_CURRENT_BINARY_DIR}")
+include_directories("${CMAKE_SOURCE_DIR}/include")
+
+file(GLOB filesys_src CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/*.cc")
+list(REMOVE_ITEM filesys_src "${CMAKE_SOURCE_DIR}/src/filesys_server.cc"
+   "${CMAKE_SOURCE_DIR}/src/filesys_client.cc")
+
+add_library(filesys_helper "${filesys_src}")
 
 # filesys_grpc_proto
 add_library(filesys_grpc_proto
@@ -44,6 +51,7 @@ filesys_client filesys_server)
 add_executable(${_target}
   "${CMAKE_SOURCE_DIR}/src/${_target}.cc")
 target_link_libraries(${_target}
+  filesys_helper
   filesys_grpc_proto
   ${_REFLECTION}
   ${_GRPC_GRPCPP}
