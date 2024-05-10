@@ -1,0 +1,35 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 2e8e07e..48e5c70 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -74,6 +74,7 @@ else()
+ endif()
+ add_library(correct SHARED ${correct_obj_files})
+ add_library(correct_static ${correct_obj_files})
++target_include_directories(correct PUBLIC ${PROJECT_SOURCE_DIR}/include)
+ set_target_properties(correct_static PROPERTIES OUTPUT_NAME "correct")
+ if(HAVE_SSE)
+   target_compile_definitions(correct PUBLIC HAVE_SSE=1)
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index b35e5f9..73c0c3f 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -49,6 +49,6 @@ set_target_properties(reed_solomon_shim_interop_test_runner PROPERTIES RUNTIME_O
+ add_test(NAME reed_solomon_shim_interop_test WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/tests" COMMAND reed_solomon_shim_interop_test_runner)
+ set(all_test_runners ${all_test_runners} reed_solomon_shim_interop_test_runner)
+ 
+-add_custom_target(test_runners DEPENDS ${all_test_runners})
+-add_custom_target(check COMMAND ${CMAKE_CTEST_COMMAND} DEPENDS test_runners)
++add_custom_target(correct_test_runners DEPENDS ${all_test_runners})
++add_custom_target(correct_check COMMAND ${CMAKE_CTEST_COMMAND} DEPENDS correct_test_runners)
+ enable_testing()
+diff --git a/tools/CMakeLists.txt b/tools/CMakeLists.txt
+index f86990a..1f48593 100644
+--- a/tools/CMakeLists.txt
++++ b/tools/CMakeLists.txt
+@@ -26,4 +26,4 @@ else()
+     set(all_tools ${all_tools} conv_find_optim_poly_annealing)
+ endif()
+ 
+-add_custom_target(tools DEPENDS ${all_tools})
++add_custom_target(correct_tools DEPENDS ${all_tools})
