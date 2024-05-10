@@ -24,6 +24,7 @@ if(MSVC)
 endif()
 
 find_package(Threads REQUIRED)
+find_package(OpenSSL REQUIRED)
 
 if(GRPC_AS_SUBMODULE)
   # One way to build a projects that uses gRPC is to just include the
