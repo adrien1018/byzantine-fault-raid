@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.12)
 project(Filesys C CXX)
 
-SET(CMAKE_CXX_FLAGS "-g -Wall -std=c++17")
+SET(CMAKE_CXX_FLAGS "-Wall -std=c++17")
 
 include(common.cmake)
 
