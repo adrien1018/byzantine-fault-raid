@@ -121,3 +121,16 @@ Bytes Decode(
   }
   return ret;
 }
+
+bool VerifyBlock(
+    const Bytes& block, int block_id, const SigningKey& public_key,
+    const std::string& filename, size_t stripe_id, int version) {
+  size_t block_size = block.size() - SigningKey::kSignatureSize;
+  Bytes metadata = GenerateMetadata(filename, stripe_id, version);
+
+  Bytes validate_buffer(block_size + 1 + metadata.size());
+  memcpy(validate_buffer.data(), block.data(), block_size);
+  validate_buffer[block_size] = block_id;
+  memcpy(validate_buffer.data() + block_size + 1, metadata.data(), metadata.size());
+  return public_key.Verify(validate_buffer.data(), validate_buffer.size(), block.data() + block_size);
+}

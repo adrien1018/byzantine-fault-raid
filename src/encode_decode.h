@@ -16,3 +16,7 @@ std::vector<Bytes> Encode(
 Bytes Decode(
     const std::vector<Bytes>& blocks, size_t raw_stripe_size, int n, int d, const SigningKey& public_key,
     const std::string& filename, size_t stripe_id, int version);
+
+bool VerifyBlock(
+    const Bytes& block, int block_id, const SigningKey& public_key,
+    const std::string& filename, size_t stripe_id, int version);

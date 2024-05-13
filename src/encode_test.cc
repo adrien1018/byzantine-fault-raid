@@ -17,6 +17,9 @@ int main() {
     //for (auto& i : data) printf("%u ", (uint32_t)i);
     //puts("");
     auto blocks = Encode(data, n, d, key, "name", 0, 0);
+    for (int i = 0; i < n; i++) {
+      std::cout << VerifyBlock(blocks[i], i, key, "name", 0, 0);
+    }
     blocks[0][0] = 1;
     blocks[1][0] = 1;
     blocks[2][0] = 1;
