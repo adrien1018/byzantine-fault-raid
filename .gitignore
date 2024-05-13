@@ -48,7 +48,6 @@ include/divisible/*
 .idea/*.xml
 
 build/
-cmake/
 lib/*
 bin/*
 .vscode/
