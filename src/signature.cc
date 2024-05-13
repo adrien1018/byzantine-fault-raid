@@ -13,15 +13,6 @@ using EVP_MD_CTX_ptr = std::unique_ptr<EVP_MD_CTX, void(*)(EVP_MD_CTX*)>;
 using Bytes = std::vector<uint8_t>;
 namespace fs = std::filesystem;
 
-EVP_PKEY* SigningKey::ReadPubkey_(const fs::path& pubkey_path) {
-  EVP_PKEY* pkey = nullptr;
-  FILE* fp = fopen(pubkey_path.c_str(), "r");
-  PEM_read_PUBKEY(fp, &pkey, nullptr, nullptr);
-  fclose(fp);
-  if (!pkey) throw std::runtime_error("Failed to read public key");
-  return pkey;
-}
-
 SigningKey::SigningKey() : key_pair_(nullptr, EVP_PKEY_free), private_key_(true) {
   EVP_PKEY* pkey = nullptr;
   EVP_PKEY_CTX* pctx = EVP_PKEY_CTX_new_id(EVP_PKEY_ED25519, nullptr);
@@ -32,11 +23,11 @@ SigningKey::SigningKey() : key_pair_(nullptr, EVP_PKEY_free), private_key_(true)
   key_pair_.reset(pkey);
 }
 
-SigningKey::SigningKey(const fs::path& key_path, bool private_key) :
-    key_pair_(nullptr, EVP_PKEY_free), private_key_(private_key) {
+SigningKey::SigningKey(const fs::path& key_path, bool is_private_key) :
+    key_pair_(nullptr, EVP_PKEY_free), private_key_(is_private_key) {
   EVP_PKEY* pkey = nullptr;
   FILE* fp = fopen(key_path.c_str(), "r");
-  if (private_key) {
+  if (is_private_key) {
     PEM_read_PrivateKey(fp, &pkey, nullptr, nullptr);
   } else {
     PEM_read_PUBKEY(fp, &pkey, nullptr, nullptr);
@@ -46,10 +37,10 @@ SigningKey::SigningKey(const fs::path& key_path, bool private_key) :
   key_pair_.reset(pkey);
 }
 
-SigningKey::SigningKey(const Bytes& key, bool private_key) :
-    key_pair_(nullptr, EVP_PKEY_free), private_key_(private_key) {
+SigningKey::SigningKey(const Bytes& key, bool is_private_key) :
+    key_pair_(nullptr, EVP_PKEY_free), private_key_(is_private_key) {
   EVP_PKEY* pkey = nullptr;
-  if (private_key) {
+  if (is_private_key) {
     pkey = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, nullptr, key.data(), key.size());
   } else {
     pkey = EVP_PKEY_new_raw_public_key(EVP_PKEY_ED25519, nullptr, key.data(), key.size());
@@ -71,7 +62,7 @@ void SigningKey::ExportPrivateKey(const fs::path& path) const {
   fclose(fp);
 }
 
-Bytes SigningKey::PublicKeyStr() const {
+Bytes SigningKey::PublicKey() const {
   size_t len = 0;
   EVP_PKEY_get_raw_public_key(key_pair_.get(), nullptr, &len);
   Bytes str(len);
@@ -79,7 +70,7 @@ Bytes SigningKey::PublicKeyStr() const {
   return str;
 }
 
-Bytes SigningKey::PrivateKeyStr() const {
+Bytes SigningKey::PrivateKey() const {
   if (!private_key_) throw std::invalid_argument("Not a private key object");
   size_t len = 0;
   EVP_PKEY_get_raw_private_key(key_pair_.get(), nullptr, &len);
@@ -133,7 +124,7 @@ int main() {
   Bytes msg;
   for (int i = 0; i < 255; i++) msg.push_back(i);
   Bytes sig = key.Sign(msg);
-  std::cout << key.Verify(msg, sig) << ' ' << SigningKey(key.PublicKeyStr(), false).Verify(msg, sig) << '\n';
+  std::cout << key.Verify(msg, sig) << ' ' << SigningKey(key.PublicKey(), false).Verify(msg, sig) << '\n';
 }
 
 #endif

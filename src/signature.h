@@ -15,20 +15,21 @@ class SigningKey {
  private:
   EVP_PKEY_ptr key_pair_;
   bool private_key_;
-
-  static EVP_PKEY* ReadPubkey_(const fs::path& pubkey_path);
  public:
   static constexpr size_t kSignatureSize = 64;
 
+  // note: private key contains the information of public key
   SigningKey();
-  SigningKey(const fs::path& key_path, bool private_key);
-  SigningKey(const Bytes& key, bool private_key);
+  SigningKey(const fs::path& key_path, bool is_private_key);
+  SigningKey(const Bytes& key, bool is_private_key);
 
+  // export public / private key to a file using PEM format
   void ExportPublicKey(const fs::path& path) const;
   void ExportPrivateKey(const fs::path& path) const;
 
-  Bytes PublicKeyStr() const;
-  Bytes PrivateKeyStr() const;
+  // raw public / private key data
+  Bytes PublicKey() const;
+  Bytes PrivateKey() const;
 
   Bytes Sign(const void* msg, size_t msg_len) const;
   Bytes Sign(const Bytes& msg) const;
