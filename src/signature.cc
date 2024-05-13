@@ -88,27 +88,37 @@ Bytes SigningKey::PrivateKeyStr() const {
   return str;
 }
 
-Bytes SigningKey::Sign(const Bytes& msg) const {
+Bytes SigningKey::Sign(const void* msg, size_t msg_len) const {
   if (!private_key_) throw std::invalid_argument("Not a private key object");
   EVP_MD_CTX_ptr mdctx(EVP_MD_CTX_create(), EVP_MD_CTX_free);
-  size_t len = 0;
+  size_t sig_len = 0;
   if (1 != EVP_DigestSignInit(mdctx.get(), nullptr, nullptr, nullptr, key_pair_.get()) ||
-      1 != EVP_DigestSign(mdctx.get(), nullptr, &len, nullptr, 0)) {
+      1 != EVP_DigestSign(mdctx.get(), nullptr, &sig_len, nullptr, 0)) {
     throw std::runtime_error("Failed to initialize DigestSign");
   }
-  Bytes sig(len);
-  if (1 != EVP_DigestSign(mdctx.get(), sig.data(), &len, msg.data(), msg.size())) {
+  if (sig_len != kSignatureSize) throw std::runtime_error("Unexpected signature size");
+  Bytes sig(sig_len);
+  if (1 != EVP_DigestSign(mdctx.get(), sig.data(), &sig_len, (const unsigned char*)msg, msg_len)) {
     throw std::runtime_error("Failed to sign message");
   }
   return sig;
 }
 
-bool SigningKey::Verify(const Bytes& msg, const Bytes& sig) const {
+Bytes SigningKey::Sign(const Bytes& msg) const {
+  return Sign(msg.data(), msg.size());
+}
+
+bool SigningKey::Verify(const void* msg, size_t msg_len, const uint8_t* sig) const {
   EVP_MD_CTX_ptr mdctx(EVP_MD_CTX_create(), EVP_MD_CTX_free);
   if (1 != EVP_DigestVerifyInit(mdctx.get(), nullptr, nullptr, nullptr, key_pair_.get())) {
     throw std::runtime_error("Failed to initialize DigestVerify");
   }
-  return 1 == EVP_DigestVerify(mdctx.get(), sig.data(), sig.size(), msg.data(), msg.size());
+  return 1 == EVP_DigestVerify(mdctx.get(), sig, kSignatureSize, (const unsigned char*)msg, msg_len);
+}
+
+bool SigningKey::Verify(const Bytes& msg, const Bytes& sig) const {
+  if (sig.size() != kSignatureSize) return false;
+  return Verify(msg.data(), msg.size(), sig.data());
 }
 
 #ifdef DEBUG_ONE_FILE

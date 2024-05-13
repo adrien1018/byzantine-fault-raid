@@ -3,7 +3,7 @@ project(Filesys C CXX)
 
 SET(CMAKE_CXX_FLAGS "-g -Wall -std=c++17")
 
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 include(FetchContentExclude)
 
 # grpc
@@ -34,7 +34,7 @@ find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
 
 # Proto file
-get_filename_component(filesys_proto "${CMAKE_SOURCE_DIR}/protos/filesys.proto" ABSOLUTE)
+get_filename_component(filesys_proto "${PROJECT_SOURCE_DIR}/protos/filesys.proto" ABSOLUTE)
 get_filename_component(filesys_proto_path "${filesys_proto}" PATH)
 
 # Generated sources
@@ -78,5 +78,6 @@ foreach(_target
     ${_PROTOBUF_LIBPROTOBUF})
 endforeach()
 
-add_executable(encode_test "${CMAKE_SOURCE_DIR}/src/encode_test.cc")
-target_link_libraries(encode_test correct)
+file(GLOB ENCODE_SRC_FILES ${PROJECT_SOURCE_DIR}/src/encode* ${PROJECT_SOURCE_DIR}/src/signature*)
+add_executable(encode_test ${ENCODE_SRC_FILES})
+target_link_libraries(encode_test correct crypto)

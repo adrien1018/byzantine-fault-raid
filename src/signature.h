@@ -18,6 +18,8 @@ class SigningKey {
 
   static EVP_PKEY* ReadPubkey_(const fs::path& pubkey_path);
  public:
+  static constexpr size_t kSignatureSize = 64;
+
   SigningKey();
   SigningKey(const fs::path& key_path, bool private_key);
   SigningKey(const Bytes& key, bool private_key);
@@ -28,6 +30,8 @@ class SigningKey {
   Bytes PublicKeyStr() const;
   Bytes PrivateKeyStr() const;
 
+  Bytes Sign(const void* msg, size_t msg_len) const;
   Bytes Sign(const Bytes& msg) const;
+  bool Verify(const void* msg, size_t msg_len, const uint8_t* sig) const;
   bool Verify(const Bytes& msg, const Bytes& sig) const;
 };

@@ -1,28 +1,30 @@
 extern "C" {
 #include <correct.h>
 }
-#include <vector>
-#include <cstdio>
+#include "encode_decode.h"
+
+#include <iostream>
+#include <random>
 
 int main() {
-  std::vector<uint8_t> msg{1,2,3,4,5,6,7,8,9,10};
-  int redundancy = 5;
-  auto encoder = correct_reed_solomon_create(
-      correct_rs_primitive_polynomial_ccsds, 1, 1, redundancy);
+  std::mt19937_64 gen;
+  SigningKey key;
+  int n = 20;
+  int d = 6;
+  Bytes data((n-d) * 5);
+  for (auto& i : data) i = gen();
 
-  std::vector<uint8_t> data(msg.size() + redundancy);
-  correct_reed_solomon_encode(encoder, msg.data(), msg.size(), data.data());
-  for (uint8_t x : data) printf("%u ", (uint32_t)x);
+  for (auto& i : data) printf("%u ", (uint32_t)i);
   puts("");
-
-  std::vector<uint8_t> error_pos{3,5,7,9,11};
-  for (int x : error_pos) data[x] = 0;
-
-  std::vector<uint8_t> msg_reconstruct(msg.size());
-  correct_reed_solomon_decode_with_erasures(
-      encoder, data.data(), data.size(), error_pos.data(), error_pos.size(), msg_reconstruct.data());
-  for (uint8_t x : msg_reconstruct) printf("%u ", (uint32_t)x);
+  auto blocks = Encode(data, n, d, key, "name", 0, 0);
+  blocks[0][0] = 1;
+  blocks[1][0] = 1;
+  blocks[2][0] = 1;
+  blocks[3][0] = 1;
+  blocks[4][0] = 1;
+  blocks[5][0] = 1;
+  auto ret = Decode(blocks, data.size(), n, d, key, "name", 0, 0);
+  std::cout << (data == ret) << std::endl;
+  for (auto& i : ret) printf("%u ", (uint32_t)i);
   puts("");
-
-  correct_reed_solomon_destroy(encoder);
 }
