@@ -1,12 +1,40 @@
-cmake_minimum_required(VERSION 3.12)
+cmake_minimum_required(VERSION 3.10...3.26)
 project(Filesys C CXX)
 
-SET(CMAKE_CXX_FLAGS "-Wall -std=c++17")
+SET(CMAKE_CXX_FLAGS "-g -Wall -std=c++17")
 
-include(common.cmake)
+list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
+include(FetchContentExclude)
+
+# grpc
+FetchContent_Declare(
+  grpc
+  GIT_REPOSITORY "https://github.com/grpc/grpc"
+  GIT_TAG "v1.63.0"
+)
+set(ABSL_ENABLE_INSTALL ON)
+set(ABSL_PROPAGATE_CXX_STD ON)
+set(FETCHCONTENT_QUIET OFF)
+FetchContent_MakeAvailable_Exclude(grpc)
+set(_PROTOBUF_LIBPROTOBUF libprotobuf)
+set(_REFLECTION grpc++_reflection)
+set(_PROTOBUF_PROTOC $<TARGET_FILE:protoc>)
+set(_GRPC_GRPCPP grpc++)
+set(_GRPC_CPP_PLUGIN_EXECUTABLE $<TARGET_FILE:grpc_cpp_plugin>)
+
+# libcorrect
+FetchContent_Declare(
+  libcorrect
+  GIT_REPOSITORY "https://github.com/quiet/libcorrect.git"
+  GIT_TAG "f5a28c74fba7a99736fe49d3a5243eca29517ae9"
+)
+FetchContent_MakeAvailable_Exclude(libcorrect)
+
+find_package(Threads REQUIRED)
+find_package(OpenSSL REQUIRED)
 
 # Proto file
-get_filename_component(filesys_proto "${CMAKE_SOURCE_DIR}/protos/filesys.proto" ABSOLUTE)
+get_filename_component(filesys_proto "${PROJECT_SOURCE_DIR}/protos/filesys.proto" ABSOLUTE)
 get_filename_component(filesys_proto_path "${filesys_proto}" PATH)
 
 # Generated sources
@@ -19,7 +47,7 @@ add_custom_command(
       COMMAND ${_PROTOBUF_PROTOC}
       ARGS --grpc_out "${CMAKE_CURRENT_BINARY_DIR}"
         --cpp_out "${CMAKE_CURRENT_BINARY_DIR}"
-        -I "${filesys_proto_path}"
+        -I "${filesys_proto_path}" -I "${grpc_SOURCE_DIR}/third_party/protobuf/src"
         --plugin=protoc-gen-grpc="${_GRPC_CPP_PLUGIN_EXECUTABLE}"
         "${filesys_proto}"
       DEPENDS "${filesys_proto}")
@@ -45,15 +73,18 @@ target_link_libraries(filesys_grpc_proto
   ${_GRPC_GRPCPP}
   ${_PROTOBUF_LIBPROTOBUF})
 
-  # Targets filesys_(client|server)
+# Targets filesys_(client|server)
 foreach(_target
-filesys_client filesys_server)
-add_executable(${_target}
-  "${CMAKE_SOURCE_DIR}/src/${_target}.cc")
-target_link_libraries(${_target}
-  filesys_helper
-  filesys_grpc_proto
-  ${_REFLECTION}
-  ${_GRPC_GRPCPP}
-  ${_PROTOBUF_LIBPROTOBUF})
+    filesys_client filesys_server)
+  add_executable(${_target}
+    "${CMAKE_SOURCE_DIR}/src/${_target}.cc")
+  target_link_libraries(${_target}
+    filesys_grpc_proto
+    ${_REFLECTION}
+    ${_GRPC_GRPCPP}
+    ${_PROTOBUF_LIBPROTOBUF})
 endforeach()
+
+file(GLOB ENCODE_SRC_FILES ${PROJECT_SOURCE_DIR}/src/encode* ${PROJECT_SOURCE_DIR}/src/signature*)
+add_executable(encode_test ${ENCODE_SRC_FILES})
+target_link_libraries(encode_test correct crypto)
