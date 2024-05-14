@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.10...3.26)
+cmake_minimum_required(VERSION 3.11)
 project(Filesys C CXX)
 
 SET(CMAKE_CXX_FLAGS "-g -Wall -std=c++17")
@@ -81,6 +81,7 @@ foreach(_target
     "${CMAKE_SOURCE_DIR}/src/${_target}.cc")
   target_link_libraries(${_target}
     filesys_grpc_proto
+    filesys_helper
     ${_REFLECTION}
     ${_GRPC_GRPCPP}
     ${_PROTOBUF_LIBPROTOBUF})
