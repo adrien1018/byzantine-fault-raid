@@ -61,6 +61,7 @@ list(REMOVE_ITEM filesys_src "${CMAKE_SOURCE_DIR}/src/filesys_server.cc"
    "${CMAKE_SOURCE_DIR}/src/filesys_client.cc")
 
 add_library(filesys_helper "${filesys_src}")
+target_link_libraries(filesys_helper correct crypto)
 
 # filesys_grpc_proto
 add_library(filesys_grpc_proto
