@@ -6,13 +6,12 @@
 
 #include <filesystem>
 #include <iostream>
-#include <map>
 #include <string>
-#include <vector>
 
 #include "CLI11.hh"
-#include "config.hh"
-#include "file.hh"
+#include "config.h"
+#include "data_storage.h"
+#include "file.h"
 #include "filesys.grpc.pb.h"
 
 using filesys::Filesys;
@@ -30,20 +29,21 @@ using grpc::ServerContext;
 using grpc::ServerWriter;
 using grpc::Status;
 
+namespace fs = std::filesystem;
+
 class FilesysImpl final : public Filesys::Service {
     Config _config;
-    std::filesystem::path _local_storage;
-    std::map<std::string, File> _file_list;
+    DataStorage _data_storage;
 
    public:
-    explicit FilesysImpl(const Config& config,
-                         const std::filesystem::path& local_storage)
-        : _config(config), _local_storage(local_storage) {}
+    explicit FilesysImpl(const Config& config, const fs::path& local_storage)
+        : _config(config), _data_storage(local_storage) {}
     Status ReadBlocks(ServerContext* context, const ReadBlocksArgs* args,
                       ReadBlocksReply* reply) override {
         std::string file_name = args->file_name();
-        uint32_t version = args->has_version() ? args->version()
-                                               : _file_list[file_name].version;
+        uint32_t version = args->has_version()
+                               ? args->version()
+                               : _data_storage.GetLatestVersion(file_name);
         std::cout << version << '\n';
         return Status::OK;
     }
@@ -51,23 +51,34 @@ class FilesysImpl final : public Filesys::Service {
     Status WriteBlocks(ServerContext* context, const WriteBlocksArgs* args,
                        google::protobuf::Empty* _) override {
         /* TODO: Verify signature */
-        /* TODO: Store file */
         uint32_t version = args->version();
-        /* TODO: Check if the version already exists. Return if so. */
+        std::string file_name = args->file_name();
+        uint32_t current_version = _data_storage.GetLatestVersion(file_name);
+        /* Check if the version already exists. Return if so. */
+        if (version <= current_version) {
+            return grpc::Status(grpc::StatusCode::ALREADY_EXISTS,
+                                "Version already exists");
+        } else if (version != current_version + 1) {
+            return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                                "Version gap.");
+        }
+        /* TODO: Store file */
         std::string block_data = args->block_data();
+        _data_storage.WriteFile(file_name, args->stripe_offset(),
+                                args->num_stripes(), version, block_data);
 
         return Status::OK;
     }
 
     Status GetFileList(ServerContext* context, const google::protobuf::Empty* _,
                        ServerWriter<GetFileListReply>* writer) override {
-        for (const auto& [file_name, meta_data] : _file_list) {
-            GetFileListReply reply;
-            reply.set_file_name(file_name);
-            reply.set_version(meta_data.version);
-            /* TODO: meta data */
-            writer->Write(reply);
-        }
+        // for (const auto& [file_name, meta_data] : _file_list) {
+        //     GetFileListReply reply;
+        //     reply.set_file_name(file_name);
+        //     reply.set_version(meta_data.version);
+        //     /* TODO: meta data */
+        //     writer->Write(reply);
+        // }
         return Status::OK;
     }
 
@@ -82,15 +93,9 @@ class FilesysImpl final : public Filesys::Service {
     }
 };
 
-/* Initialize the local storage by creating the storage directory if not already
- * existed. */
-static void InitStorage(std::filesystem::path path) {
-    std::filesystem::create_directory(path);
-}
-
 /* Entry point of the service. Start the service. */
 static void RunServer(uint16_t port, const Config& config,
-                      const std::filesystem::path& local_storage) {
+                      const fs::path& local_storage) {
     std::string server_address{"0.0.0.0:" + std::to_string(port)};
     FilesysImpl service(config, local_storage);
 
@@ -109,16 +114,13 @@ int main(int argc, char* argv[]) {
     uint16_t port{8080}; /* Default value for the port to serve on. */
     filesys.add_option("-p,--port", port);
 
-    std::filesystem::path local_storage{"./storage"};
+    fs::path local_storage{"./storage"};
     filesys.add_option("-s,--storage", local_storage);
 
     /* Set config file path for settings such as list of servers. */
-    filesys.set_config("--config", "../../config.toml")->required();
+    filesys.set_config("--config", "../config.toml")->required();
 
     CLI11_PARSE(filesys, argc, argv);
-
-    /* Setup file storage. */
-    InitStorage(local_storage);
 
     /* Process configuration file. */
     const std::string config_file = filesys.get_config_ptr()->as<std::string>();

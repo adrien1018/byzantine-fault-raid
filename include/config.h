@@ -1,5 +1,5 @@
-#ifndef _FILESYS_CONFIG_HH
-#define _FILESYS_CONFIG_HH
+#ifndef _FILESYS_CONFIG_H
+#define _FILESYS_CONFIG_H
 
 #include <cstdint>
 #include <string>
@@ -8,6 +8,7 @@
 struct Config {
     uint32_t num_malicious;
     uint32_t num_faulty;
+    uint32_t stripe_size;
     std::vector<std::string> servers;
 };
 
