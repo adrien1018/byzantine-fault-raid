@@ -5,6 +5,8 @@ import "google/protobuf/empty.proto";
 package filesys;
 
 service Filesys {
+  rpc CreateFile(CreateFileArgs) returns (google.protobuf.Empty) {}
+
   rpc ReadBlocks(ReadBlocksArgs) returns (ReadBlocksReply) {}
 
   rpc WriteBlocks(WriteBlocksArgs) returns (google.protobuf.Empty) {}
@@ -14,6 +16,11 @@ service Filesys {
   rpc GetUpdateLog(GetUpdateLogArgs) returns (stream GetUpdateLogReply) {}
 
   rpc HeartBeat(google.protobuf.Empty) returns (stream HeartBeatReply) {}
+}
+
+message CreateFileArgs {
+  string file_name = 1;
+  bytes public_key = 2;
 }
 
 message ReadBlocksArgs {
@@ -39,7 +46,7 @@ message WriteBlocksArgs {
 
 message GetFileListReply {
   string file_name = 1;
-  MetaData metadata = 2;
+  bytes public_key = 2;
   uint32 version = 3;
 }
 

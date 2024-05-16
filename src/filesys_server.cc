@@ -14,6 +14,7 @@
 #include "file.h"
 #include "filesys.grpc.pb.h"
 
+using filesys::CreateFileArgs;
 using filesys::Filesys;
 using filesys::GetFileListReply;
 using filesys::GetUpdateLogArgs;
@@ -38,13 +39,31 @@ class FilesysImpl final : public Filesys::Service {
    public:
     explicit FilesysImpl(const Config& config, const fs::path& local_storage)
         : _config(config), _data_storage(local_storage) {}
+
+    Status CreateFile(ServerContext* context, const CreateFileArgs* args,
+                      google::protobuf::Empty* _) override {
+        std::string file_name = args->file_name();
+        std::string public_key = args->public_key();
+        _data_storage.CreateFile(file_name, public_key);
+        return Status::OK;
+    }
+
     Status ReadBlocks(ServerContext* context, const ReadBlocksArgs* args,
                       ReadBlocksReply* reply) override {
         std::string file_name = args->file_name();
         uint32_t version = args->has_version()
                                ? args->version()
                                : _data_storage.GetLatestVersion(file_name);
-        std::cout << version << '\n';
+
+        Bytes block_data = _data_storage.ReadFile(file_name, version);
+        if (block_data.empty()) {
+            return grpc::Status(grpc::StatusCode::NOT_FOUND,
+                                "Version does not exist or has expired.");
+        }
+        std::string block_data_str =
+            std::string(block_data.begin(), block_data.end());
+        reply->set_block_data(block_data_str);
+        reply->set_version(version);
         return Status::OK;
     }
 
@@ -72,13 +91,17 @@ class FilesysImpl final : public Filesys::Service {
 
     Status GetFileList(ServerContext* context, const google::protobuf::Empty* _,
                        ServerWriter<GetFileListReply>* writer) override {
-        // for (const auto& [file_name, meta_data] : _file_list) {
-        //     GetFileListReply reply;
-        //     reply.set_file_name(file_name);
-        //     reply.set_version(meta_data.version);
-        //     /* TODO: meta data */
-        //     writer->Write(reply);
-        // }
+        const auto file_list = _data_storage.GetFileList();
+        for (const auto& file : file_list) {
+            GetFileListReply reply;
+            reply.set_file_name(file->FileName());
+            Bytes public_key_bytes = file->PublicKey();
+            std::string public_key_str =
+                std::string(public_key_bytes.begin(), public_key_bytes.end());
+            reply.set_public_key(public_key_str);
+            reply.set_version(file->Version());
+            writer->Write(reply);
+        }
         return Status::OK;
     }
 
