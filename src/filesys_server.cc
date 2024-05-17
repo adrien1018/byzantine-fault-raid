@@ -72,19 +72,15 @@ class FilesysImpl final : public Filesys::Service {
         /* TODO: Verify signature */
         uint32_t version = args->version();
         std::string file_name = args->file_name();
-        uint32_t current_version = _data_storage.GetLatestVersion(file_name);
-        /* Check if the version already exists. Return if so. */
-        if (version <= current_version) {
-            return grpc::Status(grpc::StatusCode::ALREADY_EXISTS,
-                                "Version already exists");
-        } else if (version != current_version + 1) {
+        std::string block_data_str = args->block_data();
+        Bytes block_data = Bytes(block_data_str.begin(), block_data_str.end());
+
+        if (!_data_storage.WriteFile(file_name, args->stripe_offset(),
+                                     args->num_stripes(), version,
+                                     block_data)) {
             return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-                                "Version gap.");
+                                "Invalid version.");
         }
-        /* TODO: Store file */
-        std::string block_data = args->block_data();
-        _data_storage.WriteFile(file_name, args->stripe_offset(),
-                                args->num_stripes(), version, block_data);
 
         return Status::OK;
     }

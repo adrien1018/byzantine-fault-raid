@@ -90,3 +90,7 @@ endforeach()
 file(GLOB ENCODE_SRC_FILES ${PROJECT_SOURCE_DIR}/src/encode* ${PROJECT_SOURCE_DIR}/src/signature*)
 add_executable(encode_test ${ENCODE_SRC_FILES})
 target_link_libraries(encode_test correct crypto)
+
+file(GLOB STORAGE_SRC_FILES ${PROJECT_SOURCE_DIR}/src/data_storage* ${PROJECT_SOURCE_DIR}/src/file.cc ${PROJECT_SOURCE_DIR}/src/signature*)
+add_executable(storage_test ${STORAGE_SRC_FILES})
+target_link_libraries(storage_test correct crypto)
