@@ -100,18 +100,114 @@ void TestExtendFile() {
 
     storage.CreateFile("temp", dummy_key);
     Bytes block = RandomBlock();
-    assert(storage.WriteFile("temp", 0, 1, 1, block) && "Write first fail");
+    assert(storage.WriteFile("temp", 0, 1, 1, block) && "Write first failed");
     assert(block == storage.ReadFile("temp", 1) && "Read fail 1");
 
     Bytes block1 = RandomBlock(2 * BLOCK_SIZE);
-    assert(storage.WriteFile("temp", 1, 2, 2, block1) && "Write second fail");
+    assert(storage.WriteFile("temp", 1, 2, 2, block1) && "Write second failed");
     block.insert(block.end(), block1.begin(), block1.end());
     assert(block == storage.ReadFile("temp", 2) && "Read fail 2");
 
     Bytes block2 = RandomBlock(4 * BLOCK_SIZE);
-    assert(storage.WriteFile("temp", 3, 4, 3, block2) && "Write third fail");
+    assert(storage.WriteFile("temp", 3, 4, 3, block2) && "Write third failed");
     block.insert(block.end(), block2.begin(), block2.end());
     assert(block == storage.ReadFile("temp", 3) && "Read fail 3");
+
+    std::cout << "Passed" << std::endl;
+    fs::remove_all(test_dir);
+}
+
+void TestOverlapExtend() {
+    std::cout << "Running TestOverlapExtend...   ";
+    std::string test_dir = "TestOverlapExtend";
+    DataStorage storage(test_dir);
+
+    storage.CreateFile("temp", dummy_key);
+    Bytes block = RandomBlock(2 * BLOCK_SIZE);
+    assert(storage.WriteFile("temp", 0, 2, 1, block) && "Write first failed");
+    assert(block == storage.ReadFile("temp", 1) && "Read fail 1");
+
+    Bytes block2 = RandomBlock(2 * BLOCK_SIZE);
+    assert(storage.WriteFile("temp", 1, 2, 2, block2) && "Write second failed");
+    block.resize(BLOCK_SIZE);
+    block.insert(block.end(), block2.begin(), block2.end());
+    assert(block == storage.ReadFile("temp", 2) && "Read fail 2");
+
+    Bytes block3 = RandomBlock(4 * BLOCK_SIZE);
+    assert(storage.WriteFile("temp", 2, 4, 3, block3) && "Write third failed");
+    block.resize(2 * BLOCK_SIZE);
+    block.insert(block.end(), block3.begin(), block3.end());
+    assert(block == storage.ReadFile("temp", 3) && "Read fail 3");
+
+    std::cout << "Passed" << std::endl;
+    fs::remove_all(test_dir);
+}
+
+void TestSimpleMultipleWrite() {
+    std::cout << "Running TestSimpleMultipleWrite...   ";
+    std::string test_dir = "TestSimpleMultipleWrite";
+    DataStorage storage(test_dir);
+
+    storage.CreateFile("temp", dummy_key);
+    Bytes version1 = RandomBlock(10 * BLOCK_SIZE);
+    assert(storage.WriteFile("temp", 0, 10, 1, version1) &&
+           "Write first failed");
+
+    Bytes update2 = RandomBlock(2 * BLOCK_SIZE);
+    Bytes version2 = version1;
+    uint32_t stripe_offset = 2;
+    for (uint32_t i = 0; i < update2.size(); i++) {
+        version2[stripe_offset * BLOCK_SIZE + i] = update2[i];
+    }
+    assert(storage.WriteFile("temp", stripe_offset, 2, 2, update2) &&
+           "Write second failed");
+
+    Bytes update3 = RandomBlock(4 * BLOCK_SIZE);
+    Bytes version3 = version2;
+    stripe_offset = 5;
+    for (uint32_t i = 0; i < update3.size(); i++) {
+        version3[stripe_offset * BLOCK_SIZE + i] = update3[i];
+    }
+    assert(storage.WriteFile("temp", stripe_offset, 4, 3, update3));
+
+    Bytes version4 = RandomBlock(10 * BLOCK_SIZE);
+    assert(storage.WriteFile("temp", 0, 10, 4, version4) &&
+           "Write four failed");
+
+    assert(version4 == storage.ReadFile("temp", 4) && "Version 4 mismatched");
+    assert(version3 == storage.ReadFile("temp", 3) && "Version 3 mismatched");
+    assert(version2 == storage.ReadFile("temp", 2) && "Version 2 mismatched");
+    assert(version1 == storage.ReadFile("temp", 1) && "Version 1 mismatched");
+
+    std::cout << "Passed" << std::endl;
+    fs::remove_all(test_dir);
+}
+
+void TestMultipleExtendWrite() {
+    std::cout << "Running TestSimpleMultipleWrite...   ";
+    std::string test_dir = "TestSimpleMultipleWrite";
+    DataStorage storage(test_dir);
+
+    storage.CreateFile("temp", dummy_key);
+    Bytes version1 = RandomBlock();
+    assert(storage.WriteFile("temp", 0, 1, 1, version1) &&
+           "Write first failed");
+
+    Bytes update2 = RandomBlock();
+    Bytes version2 = version1;
+    version2.insert(version2.end(), update2.begin(), update2.end());
+    assert(storage.WriteFile("temp", 1, 1, 2, update2) &&
+           "Write second failed");
+
+    Bytes update3 = RandomBlock(2 * BLOCK_SIZE);
+    Bytes version3 = version2;
+    version3.resize(BLOCK_SIZE);
+    version3.insert(version3.end(), update3.begin(), update3.end());
+    assert(storage.WriteFile("temp", 1, 2, 3, update3) && "Write third failed");
+
+    assert(version3 == storage.ReadFile("temp", 3) && "Version 3 mismatched");
+    assert(version2 == storage.ReadFile("temp", 2) && "Version 2 mismatched");
+    assert(version1 == storage.ReadFile("temp", 1) && "Version 1 mismatched");
 
     std::cout << "Passed" << std::endl;
     fs::remove_all(test_dir);
@@ -122,4 +218,7 @@ int main() {
     TestSimpleReadWrite();
     TestGetLatestVersion();
     TestExtendFile();
+    TestOverlapExtend();
+    TestSimpleMultipleWrite();
+    TestMultipleExtendWrite();
 }

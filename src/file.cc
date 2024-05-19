@@ -119,6 +119,15 @@ bool File::ReconstructVersion(uint32_t version, Bytes& latest_version) {
         std::copy(latest_update->old_image.begin(),
                   latest_update->old_image.end(),
                   latest_version.begin() + stripe_offset * BLOCK_SIZE);
+
+        /* This operation assumes that each update only keeps the file size
+         * the same or extends it, but never shrinks.*/
+        if (latest_update->old_image.size() <
+            latest_update->num_stripes * BLOCK_SIZE) {
+            latest_version.resize(latest_version.size() -
+                                  (latest_update->num_stripes * BLOCK_SIZE -
+                                   latest_update->old_image.size()));
+        }
         latest_update = std::next(latest_update);
     }
 
