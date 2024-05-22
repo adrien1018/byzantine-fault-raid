@@ -1,8 +1,9 @@
+#include "reed_solomon.h"
+
 #include <cstring>
-#include <vector>
 #include <algorithm>
 
-#include "reed_solomon.h"
+#include "signature.h"
 
 namespace {
 
@@ -98,7 +99,7 @@ std::vector<GFInt> ComputeDecodeTable(const std::vector<uint8_t>& pos) {
 
 } // namespace
 
-void RSEncode(uint8_t N, uint8_t D, size_t blocks, const uint8_t in[], uint8_t out[]) {
+std::vector<Bytes> RSEncode(uint8_t N, uint8_t D, size_t blocks, const uint8_t in[]) {
   uint8_t deg = N-D;
   auto table = ComputeEncodeTable(deg);
   std::vector<GFInt> ls(D, 1);
@@ -106,23 +107,24 @@ void RSEncode(uint8_t N, uint8_t D, size_t blocks, const uint8_t in[], uint8_t o
     for (uint8_t j = 0; j < deg; j++) ls[x-deg] *= GFInt(x) - GFInt(j);
   }
   std::vector<GFInt> ins(deg);
-  for (size_t i = 0; i < blocks; i++, in += deg, out += N) {
-    memcpy(out, in, deg);
-    for (uint8_t j = 0; j < deg; j++) ins[j] = table[j] * GFInt(in[j]);
+  std::vector<Bytes> out(N, Bytes(blocks));
+  for (size_t i = 0; i < blocks; i++) {
+    for (uint8_t j = 0; j < deg; j++) out[j][i] = in[deg * i + j];
     for (uint8_t x = deg; x < N; x++) {
       GFInt sum = 0;
-      for (uint8_t j = 0; j < deg; j++) sum += ins[j] / (GFInt(x) - GFInt(j));
-      out[x] = ls[x-deg] * sum;
+      for (uint8_t j = 0; j < deg; j++) sum += table[j] * GFInt(in[deg * i + j]) / (GFInt(x) - GFInt(j));
+      out[x][i] = ls[x-deg] * sum;
     }
   }
+  return out;
 }
 
-bool RSDecode(uint8_t N, uint8_t D, size_t blocks, const uint8_t in[], const bool err[], uint8_t out[]) {
+bool RSDecode(uint8_t N, uint8_t D, size_t blocks, const std::vector<Bytes>& in, const bool err[], uint8_t out[]) {
   uint8_t deg = N-D;
   size_t errs = std::count_if(err, err + deg, [](bool x){ return x; });
   if (errs == 0) {
-    for (size_t i = 0; i < blocks; i++, in += N, out += deg) {
-      memcpy(out, in, deg);
+    for (size_t i = 0; i < blocks; i++) {
+      for (uint8_t j = 0; j < deg; j++) out[i * deg + j] = in[j][i];
     }
     return true;
   }
@@ -146,14 +148,15 @@ bool RSDecode(uint8_t N, uint8_t D, size_t blocks, const uint8_t in[], const boo
     for (uint8_t k = 0; k < deg; k++) ls[i] *= GFInt(err_pos[i]) - GFInt(pos[k]);
   }
   std::vector<GFInt> ins(deg);
-  for (size_t i = 0; i < blocks; i++, in += N, out += deg) {
-    memcpy(out, in, deg);
-    for (uint8_t k = 0; k < deg; k++) ins[k] = table[k] * GFInt(in[pos[k]]);
-    for (uint8_t i = 0; i < err_pos.size(); i++) {
-      uint8_t x = err_pos[i];
+  for (size_t i = 0; i < blocks; i++) {
+    for (uint8_t k = 0; k < deg; k++) {
+      if (!err[k]) out[i * deg + k] = in[k][i];
+    }
+    for (uint8_t j = 0; j < err_pos.size(); j++) {
+      uint8_t x = err_pos[j];
       GFInt sum = 0;
-      for (uint8_t k = 0; k < deg; k++) sum += ins[k] / (GFInt(x) - GFInt(pos[k]));
-      out[x] = ls[i] * sum;
+      for (uint8_t k = 0; k < deg; k++) sum += table[k] * GFInt(in[pos[k]][i]) / (GFInt(x) - GFInt(pos[k]));
+      out[i * deg + x] = ls[j] * sum;
     }
   }
   return true;
@@ -188,59 +191,57 @@ int main() {
     int D = 4;
 
     int C = 1 * 1024 * 1024 / (N-D);
-    std::vector<uint8_t> data((N-D)*C), encode(N*C), res((N-D)*C);
+    //int C = 1;
+    std::vector<uint8_t> data((N-D)*C), res((N-D)*C);
     bool err_vec[256] = {};
     for (auto& i : data) i = gen();
 
     auto start = steady_clock::now();
-    RSEncode(N, D, C, data.data(), encode.data());
+    auto encode = RSEncode(N, D, C, data.data());
     auto end = steady_clock::now();
     double encode_time = duration<double>(end - start).count();
 
     std::vector<uint8_t> errs;
     start = steady_clock::now();
-    bool st = RSDecode(N, D, C, encode.data(), err_vec, res.data());
+    bool st = RSDecode(N, D, C, encode, err_vec, res.data());
     end = steady_clock::now();
     double decode_time = duration<double>(end - start).count();
-
     if (!st || res != data) throw;
 
     memset(res.data(), 0, res.size());
     errs.push_back(1);
     err_vec[1] = true;
-    for (int j = 0; j < C; j++) {
-      for (auto& i : errs) encode[N*j+i] = 0, err_vec[i] = true;
-    }
+    for (auto& i : errs) encode[i].clear(), err_vec[i] = true;
 
     start = steady_clock::now();
-    st = RSDecode(N, D, C, encode.data(), err_vec, res.data());
+    st = RSDecode(N, D, C, encode, err_vec, res.data());
     end = steady_clock::now();
     double decode_correct_1_time = duration<double>(end - start).count();
+    if (!st || res != data) throw;
 
     memset(res.data(), 0, res.size());
     for (int i = 0; i < D; i++) {
       errs.push_back(i);
     }
-    for (int j = 0; j < C; j++) {
-      for (auto& i : errs) encode[N*j+i] = 0, err_vec[i] = true;
-    }
+    for (auto& i : errs) encode[i].clear(), err_vec[i] = true;
 
     start = steady_clock::now();
-    st = RSDecode(N, D, C, encode.data(), err_vec, res.data());
+    st = RSDecode(N, D, C, encode, err_vec, res.data());
     end = steady_clock::now();
     double decode_correct_time = duration<double>(end - start).count();
-
     if (!st || res != data) throw;
+
     printf("%.6lf %.6lf %.6lf %.6lf\n", encode_time, decode_time, decode_correct_1_time, decode_correct_time);
-  }
-  /*
+    /*
   for (auto& i : data) std::cout << (uint32_t)i << ' ';
   std::cout << '\n';
-  for (auto& i : encode) std::cout << (uint32_t)i << ' ';
+  for (auto& i : encode) for (auto& j : i) std::cout << (uint32_t)j << ' ';
   std::cout << '\n';
   for (auto& i : res) std::cout << (uint32_t)i << ' ';
   std::cout << '\n';
   */
+  }
+
 }
 
 #endif
