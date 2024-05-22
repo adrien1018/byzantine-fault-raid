@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.10...3.26)
 project(Filesys C CXX)
 
-SET(CMAKE_CXX_FLAGS "-g -Wall -std=c++17")
+SET(CMAKE_CXX_FLAGS "-g -O2 -Wall -std=c++17")
 
 list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 include(FetchContentExclude)
@@ -21,14 +21,6 @@ set(_REFLECTION grpc++_reflection)
 set(_PROTOBUF_PROTOC $<TARGET_FILE:protoc>)
 set(_GRPC_GRPCPP grpc++)
 set(_GRPC_CPP_PLUGIN_EXECUTABLE $<TARGET_FILE:grpc_cpp_plugin>)
-
-# libcorrect
-FetchContent_Declare(
-  libcorrect
-  GIT_REPOSITORY "https://github.com/quiet/libcorrect.git"
-  GIT_TAG "f5a28c74fba7a99736fe49d3a5243eca29517ae9"
-)
-FetchContent_MakeAvailable_Exclude(libcorrect)
 
 find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
@@ -78,6 +70,6 @@ foreach(_target
     ${_PROTOBUF_LIBPROTOBUF})
 endforeach()
 
-file(GLOB ENCODE_SRC_FILES ${PROJECT_SOURCE_DIR}/src/encode* ${PROJECT_SOURCE_DIR}/src/signature*)
+file(GLOB ENCODE_SRC_FILES ${PROJECT_SOURCE_DIR}/src/encode* ${PROJECT_SOURCE_DIR}/src/signature* ${PROJECT_SOURCE_DIR}/src/reed*)
 add_executable(encode_test ${ENCODE_SRC_FILES})
-target_link_libraries(encode_test correct crypto)
+target_link_libraries(encode_test crypto)

@@ -1,6 +1,3 @@
-extern "C" {
-#include <correct.h>
-}
 #include "encode_decode.h"
 
 #include <iostream>
@@ -35,10 +32,11 @@ int main() {
     //puts("");
   }
   */
-  constexpr int SIZE = 1 * 1024 * 1024;
-  for (int n : {8, 15, 80, 255}) {
-    int d = 4;
-    Bytes data(SIZE / (n-d) * (n-d));
+  //constexpr int SIZE = 1 * 1024 * 1024;
+  printf("%7s%4s%4s%12s%12s%12s%12s\n", "Block", "n", "d", "Encode", "Dec no err", "Dec 1 err", "Dec n-d err");
+  for (int block_size : {4096, 16384, 65536}) for (int n : {6, 20, 70, 255}) for (int d : {n/6,n/2}) {
+    //Bytes data(SIZE / (n-d) * (n-d));
+    Bytes data(block_size * (n - d));
     for (auto& i : data) i = gen();
     SigningKey key;
     auto start = steady_clock::now();
@@ -50,18 +48,27 @@ int main() {
     auto ret = Decode(blocks, data.size(), n, d, key, "name", 0, 0);
     end = steady_clock::now();
     double decode_time = duration<double>(end - start).count();
+    if (ret != data) throw;
 
     blocks[0][0]++;
     start = steady_clock::now();
     ret = Decode(blocks, data.size(), n, d, key, "name", 0, 0);
     end = steady_clock::now();
     double decode_correct_1_time = duration<double>(end - start).count();
+    if (ret != data) throw;
 
     for (int i = 0; i < d; i++) blocks[i][0]++;
     start = steady_clock::now();
     ret = Decode(blocks, data.size(), n, d, key, "name", 0, 0);
     end = steady_clock::now();
     double decode_correct_time = duration<double>(end - start).count();
-    printf("%.6lf %.6lf %.6lf %.6lf\n", encode_time, decode_time, decode_correct_1_time, decode_correct_time);
+    if (ret != data) throw;
+
+    encode_time = data.size() / (encode_time * 1024 * 1024);
+    decode_time = data.size() / (decode_time * 1024 * 1024);
+    decode_correct_1_time = data.size() / (decode_correct_1_time * 1024 * 1024);
+    decode_correct_time = data.size() / (decode_correct_time * 1024 * 1024);
+
+    printf("%7d%4d%4d%12.3lf%12.3lf%12.3lf%12.3lf MB/s\n", (int)blocks.back().size(), n, d, encode_time, decode_time, decode_correct_1_time, decode_correct_time);
   }
 }
