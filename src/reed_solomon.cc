@@ -112,12 +112,21 @@ std::vector<Bytes> RSEncode(uint8_t N, uint8_t D, size_t blocks, const uint8_t i
     memcpy(out[j].data(), in + j * blocks, blocks);
   }
   std::vector<GFInt> table_x(deg);
+  constexpr size_t kBlock = 32;
   for (uint8_t x = deg; x < N; x++) {
     for (uint8_t j = 0; j < deg; j++) table_x[j] = table[j] / (GFInt(x) - GFInt(j));
-    for (size_t i = 0; i < blocks; i++) {
-      GFInt sum = 0;
-      for (uint8_t j = 0; j < deg; j++) sum += table_x[j] * GFInt(in[j * blocks + i]);
-      out[x][i] = ls[x-deg] * sum;
+    for (size_t bi = 0; bi < blocks; bi += kBlock) {
+      GFInt sum[kBlock];
+      memset(sum, 0, sizeof(sum));
+      size_t p = std::min(kBlock, blocks - bi);
+      for (uint8_t j = 0; j < deg; j++) {
+        for (size_t ni = 0, i = bi; ni < p; ni++, i++) {
+          sum[ni] += table_x[j] * GFInt(in[j * blocks + i]);
+        }
+      }
+      for (size_t ni = 0, i = bi; ni < p; ni++, i++) {
+        out[x][i] = ls[x-deg] * sum[ni];
+      }
     }
   }
   return out;
@@ -150,13 +159,22 @@ bool RSDecode(uint8_t N, uint8_t D, size_t blocks, const std::vector<Bytes>& in,
     for (uint8_t k = 0; k < deg; k++) ls[i] *= GFInt(err_pos[i]) - GFInt(pos[k]);
   }
   std::vector<GFInt> table_x(deg);
+  constexpr size_t kBlock = 32;
   for (uint8_t j = 0; j < err_pos.size(); j++) {
     uint8_t x = err_pos[j];
     for (uint8_t k = 0; k < deg; k++) table_x[k] = table[k] / (GFInt(x) - GFInt(pos[k]));
-    for (size_t i = 0; i < blocks; i++) {
-      GFInt sum = 0;
-      for (uint8_t k = 0; k < deg; k++) sum += table_x[k] * GFInt(in[pos[k]][i]);
-      out[x * blocks + i] = ls[j] * sum;
+    for (size_t bi = 0; bi < blocks; bi += kBlock) {
+      GFInt sum[kBlock];
+      memset(sum, 0, sizeof(sum));
+      size_t p = std::min(kBlock, blocks - bi);
+      for (uint8_t k = 0; k < deg; k++) {
+        for (size_t ni = 0, i = bi; ni < p; ni++, i++) {
+          sum[ni] += table_x[k] * GFInt(in[pos[k]][i]);
+        }
+      }
+      for (size_t ni = 0, i = bi; ni < p; ni++, i++) {
+        out[x * blocks + i] = ls[j] * sum[ni];
+      }
     }
   }
   return true;
