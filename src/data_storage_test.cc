@@ -5,21 +5,26 @@
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
-#include <unordered_map>
+
+#include "encode_decode.h"
+#include "signature.h"
 
 namespace fs = std::filesystem;
 
-const std::string dummy_key =
-    "MIGeMA0GCSqGSIb3DQEBAQUAA4GMADCBiAKBgH7whVnaRnci7/"
-    "72LXldOpnxfuet9Cl1ktW4D0u47Psd0Ob049F+Nvpv19AJP7VTMaCSuMIsWkR322/"
-    "w4TszDvhQ+4vuVj33l+14YKfan03qff37jG6w/GZ8JBNzkU9FgwUTGT+tY5SDJ3Tmo/"
-    "uuLKePg1OZ11q8BByKwS7SxUVAgMBAAE=";
+SigningKey private_key;
+Bytes public_key;
+
+void SetKey() {
+    private_key = SigningKey();
+    public_key = private_key.PublicKey();
+}
 
 Bytes RandomBlock(int size = BLOCK_SIZE) {
     Bytes block(size);
     for (auto& byte : block) {
         byte = rand() % static_cast<int>(std::numeric_limits<uint8_t>::max());
     }
+
     return block;
 }
 
@@ -29,7 +34,8 @@ void TestGetFileList() {
     std::vector<std::string> file_list{"a", "b", "c", "d"};
     DataStorage storage(test_dir);
     for (const auto& file_name : file_list) {
-        assert(storage.CreateFile(file_name, dummy_key) && "CreateFile failed");
+        assert(storage.CreateFile(file_name, public_key) &&
+               "CreateFile failed");
     }
 
     auto retrieved_file_list = storage.GetFileList();
@@ -41,9 +47,8 @@ void TestGetFileList() {
                          file->FileName()) != file_list.end() &&
                "File not found.");
         assert(file->Version() == 0 && "Version incorrect");
-        Bytes public_key = file->PublicKey();
-        assert(std::string(public_key.begin(), public_key.end()) == dummy_key &&
-               "Public key mismatch");
+        Bytes pkey = file->PublicKey();
+        assert(pkey == public_key && "Public key mismatch");
     }
 
     std::cout << "Passed" << std::endl;
@@ -55,10 +60,10 @@ void TestSimpleReadWrite() {
     std::string test_dir = "TestSimpleReadWrite";
     DataStorage storage(test_dir);
 
-    storage.CreateFile("temp", dummy_key);
+    storage.CreateFile("temp", public_key);
     Bytes block = RandomBlock();
     storage.WriteFile("temp", 0, 1, 1, block);
-    Bytes retrieved_block = storage.ReadFile("temp", 1);
+    Bytes retrieved_block = storage.ReadFile("temp", 0, 1, 1);
     assert(block == retrieved_block && "Block mismatch");
 
     std::cout << "Passed" << std::endl;
@@ -73,7 +78,7 @@ void TestGetLatestVersion() {
     std::vector<std::string> file_list{"a", "b", "c", "d"};
 
     for (const auto& file_name : file_list) {
-        storage.CreateFile(file_name, dummy_key);
+        storage.CreateFile(file_name, public_key);
     }
 
     for (const auto& file_name : file_list) {
@@ -86,7 +91,7 @@ void TestGetLatestVersion() {
         }
         assert(update_num == storage.GetLatestVersion(file_name) &&
                "Latest version mismatched");
-        Bytes retrieved_block = storage.ReadFile(file_name, update_num);
+        Bytes retrieved_block = storage.ReadFile(file_name, 0, 1, update_num);
         assert(block == retrieved_block && "Block mismatch");
     }
     std::cout << "Passed" << std::endl;
@@ -98,20 +103,20 @@ void TestExtendFile() {
     std::string test_dir = "TestExtendFile";
     DataStorage storage(test_dir);
 
-    storage.CreateFile("temp", dummy_key);
+    storage.CreateFile("temp", public_key);
     Bytes block = RandomBlock();
     assert(storage.WriteFile("temp", 0, 1, 1, block) && "Write first failed");
-    assert(block == storage.ReadFile("temp", 1) && "Read fail 1");
+    assert(block == storage.ReadFile("temp", 0, 1, 1) && "Read fail 1");
 
     Bytes block1 = RandomBlock(2 * BLOCK_SIZE);
     assert(storage.WriteFile("temp", 1, 2, 2, block1) && "Write second failed");
     block.insert(block.end(), block1.begin(), block1.end());
-    assert(block == storage.ReadFile("temp", 2) && "Read fail 2");
+    assert(block == storage.ReadFile("temp", 0, 3, 2) && "Read fail 2");
 
     Bytes block2 = RandomBlock(4 * BLOCK_SIZE);
     assert(storage.WriteFile("temp", 3, 4, 3, block2) && "Write third failed");
     block.insert(block.end(), block2.begin(), block2.end());
-    assert(block == storage.ReadFile("temp", 3) && "Read fail 3");
+    assert(block == storage.ReadFile("temp", 0, 7, 3) && "Read fail 3");
 
     std::cout << "Passed" << std::endl;
     fs::remove_all(test_dir);
@@ -122,22 +127,22 @@ void TestOverlapExtend() {
     std::string test_dir = "TestOverlapExtend";
     DataStorage storage(test_dir);
 
-    storage.CreateFile("temp", dummy_key);
+    storage.CreateFile("temp", public_key);
     Bytes block = RandomBlock(2 * BLOCK_SIZE);
     assert(storage.WriteFile("temp", 0, 2, 1, block) && "Write first failed");
-    assert(block == storage.ReadFile("temp", 1) && "Read fail 1");
+    assert(block == storage.ReadFile("temp", 0, 2, 1) && "Read fail 1");
 
     Bytes block2 = RandomBlock(2 * BLOCK_SIZE);
     assert(storage.WriteFile("temp", 1, 2, 2, block2) && "Write second failed");
     block.resize(BLOCK_SIZE);
     block.insert(block.end(), block2.begin(), block2.end());
-    assert(block == storage.ReadFile("temp", 2) && "Read fail 2");
+    assert(block == storage.ReadFile("temp", 0, 3, 2) && "Read fail 2");
 
     Bytes block3 = RandomBlock(4 * BLOCK_SIZE);
     assert(storage.WriteFile("temp", 2, 4, 3, block3) && "Write third failed");
     block.resize(2 * BLOCK_SIZE);
     block.insert(block.end(), block3.begin(), block3.end());
-    assert(block == storage.ReadFile("temp", 3) && "Read fail 3");
+    assert(block == storage.ReadFile("temp", 0, 6, 3) && "Read fail 3");
 
     std::cout << "Passed" << std::endl;
     fs::remove_all(test_dir);
@@ -148,7 +153,7 @@ void TestSimpleMultipleWrite() {
     std::string test_dir = "TestSimpleMultipleWrite";
     DataStorage storage(test_dir);
 
-    storage.CreateFile("temp", dummy_key);
+    storage.CreateFile("temp", public_key);
     Bytes version1 = RandomBlock(10 * BLOCK_SIZE);
     assert(storage.WriteFile("temp", 0, 10, 1, version1) &&
            "Write first failed");
@@ -174,10 +179,14 @@ void TestSimpleMultipleWrite() {
     assert(storage.WriteFile("temp", 0, 10, 4, version4) &&
            "Write four failed");
 
-    assert(version4 == storage.ReadFile("temp", 4) && "Version 4 mismatched");
-    assert(version3 == storage.ReadFile("temp", 3) && "Version 3 mismatched");
-    assert(version2 == storage.ReadFile("temp", 2) && "Version 2 mismatched");
-    assert(version1 == storage.ReadFile("temp", 1) && "Version 1 mismatched");
+    assert(version4 == storage.ReadFile("temp", 0, 10, 4) &&
+           "Version 4 mismatched");
+    assert(version3 == storage.ReadFile("temp", 0, 10, 3) &&
+           "Version 3 mismatched");
+    assert(version2 == storage.ReadFile("temp", 0, 10, 2) &&
+           "Version 2 mismatched");
+    assert(version1 == storage.ReadFile("temp", 0, 10, 1) &&
+           "Version 1 mismatched");
 
     std::cout << "Passed" << std::endl;
     fs::remove_all(test_dir);
@@ -188,7 +197,7 @@ void TestMultipleExtendWrite() {
     std::string test_dir = "TestSimpleMultipleWrite";
     DataStorage storage(test_dir);
 
-    storage.CreateFile("temp", dummy_key);
+    storage.CreateFile("temp", public_key);
     Bytes version1 = RandomBlock();
     assert(storage.WriteFile("temp", 0, 1, 1, version1) &&
            "Write first failed");
@@ -205,15 +214,19 @@ void TestMultipleExtendWrite() {
     version3.insert(version3.end(), update3.begin(), update3.end());
     assert(storage.WriteFile("temp", 1, 2, 3, update3) && "Write third failed");
 
-    assert(version3 == storage.ReadFile("temp", 3) && "Version 3 mismatched");
-    assert(version2 == storage.ReadFile("temp", 2) && "Version 2 mismatched");
-    assert(version1 == storage.ReadFile("temp", 1) && "Version 1 mismatched");
+    assert(version3 == storage.ReadFile("temp", 0, 3, 3) &&
+           "Version 3 mismatched");
+    assert(version2 == storage.ReadFile("temp", 0, 2, 2) &&
+           "Version 2 mismatched");
+    assert(version1 == storage.ReadFile("temp", 0, 1, 1) &&
+           "Version 1 mismatched");
 
     std::cout << "Passed" << std::endl;
     fs::remove_all(test_dir);
 }
 
 int main() {
+    SetKey();
     TestGetFileList();
     TestSimpleReadWrite();
     TestGetLatestVersion();

@@ -20,7 +20,6 @@ using filesys::GetFileListReply;
 using filesys::GetUpdateLogArgs;
 using filesys::GetUpdateLogReply;
 using filesys::HeartBeatReply;
-using filesys::MetaData;
 using filesys::ReadBlocksArgs;
 using filesys::ReadBlocksReply;
 using filesys::WriteBlocksArgs;
@@ -35,16 +34,21 @@ namespace fs = std::filesystem;
 class FilesysImpl final : public Filesys::Service {
     Config _config;
     DataStorage _data_storage;
+    uint32_t _server_idx;
 
    public:
-    explicit FilesysImpl(const Config& config, const fs::path& local_storage)
-        : _config(config), _data_storage(local_storage) {}
+    explicit FilesysImpl(const Config& config, const fs::path& local_storage,
+                         uint32_t server_idx)
+        : _config(config),
+          _data_storage(local_storage),
+          _server_idx(server_idx) {}
 
     Status CreateFile(ServerContext* context, const CreateFileArgs* args,
                       google::protobuf::Empty* _) override {
         std::string file_name = args->file_name();
         std::string public_key = args->public_key();
-        _data_storage.CreateFile(file_name, public_key);
+        _data_storage.CreateFile(file_name,
+                                 Bytes(public_key.begin(), public_key.end()));
         return Status::OK;
     }
 
@@ -55,7 +59,8 @@ class FilesysImpl final : public Filesys::Service {
                                ? args->version()
                                : _data_storage.GetLatestVersion(file_name);
 
-        Bytes block_data = _data_storage.ReadFile(file_name, version);
+        Bytes block_data = _data_storage.ReadFile(
+            file_name, args->stripe_offset(), args->num_stripes(), version);
         if (block_data.empty()) {
             return grpc::Status(grpc::StatusCode::NOT_FOUND,
                                 "Version does not exist or has expired.");
@@ -76,7 +81,7 @@ class FilesysImpl final : public Filesys::Service {
         Bytes block_data = Bytes(block_data_str.begin(), block_data_str.end());
 
         if (!_data_storage.WriteFile(file_name, args->stripe_offset(),
-                                     args->num_stripes(), version,
+                                     args->num_stripes(), _server_idx, version,
                                      block_data)) {
             return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
                                 "Invalid version.");
@@ -113,10 +118,25 @@ class FilesysImpl final : public Filesys::Service {
 };
 
 /* Entry point of the service. Start the service. */
-static void RunServer(uint16_t port, const Config& config,
-                      const fs::path& local_storage) {
-    std::string server_address{"0.0.0.0:" + std::to_string(port)};
-    FilesysImpl service(config, local_storage);
+static void RunServer(const std::string& ip_address, uint16_t port,
+                      const Config& config, const fs::path& local_storage) {
+    std::string server_address{ip_address + std::to_string(port)};
+
+    uint32_t server_idx = config.servers.size();
+    for (uint32_t i = 0; i < config.servers.size(); i++) {
+        const std::string& address_port = config.servers[i];
+        const std::string address =
+            address_port.substr(0, address_port.find(":"));
+        if (address == ip_address) {
+            server_idx = i;
+        }
+    }
+
+    if (server_idx == config.servers.size()) {
+        throw std::runtime_error("Invalid server IP address");
+    }
+
+    FilesysImpl service(config, local_storage, server_idx);
 
     ServerBuilder builder;
     builder.AddListeningPort(server_address, grpc::InsecureServerCredentials());
@@ -129,6 +149,9 @@ static void RunServer(uint16_t port, const Config& config,
 int main(int argc, char* argv[]) {
     /* Parse command line arguments. */
     CLI::App filesys;
+
+    std::string ip_address;
+    filesys.add_option("-a,--address", ip_address)->required();
 
     uint16_t port{8080}; /* Default value for the port to serve on. */
     filesys.add_option("-p,--port", port);
@@ -144,7 +167,7 @@ int main(int argc, char* argv[]) {
     /* Process configuration file. */
     const std::string config_file = filesys.get_config_ptr()->as<std::string>();
     Config config = ParseConfig(config_file);
-    RunServer(port, config, local_storage);
+    RunServer(ip_address, port, config, local_storage);
 
     return 0;
 }

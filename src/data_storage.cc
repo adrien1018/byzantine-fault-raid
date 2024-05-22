@@ -9,23 +9,22 @@ DataStorage::DataStorage(const fs::path& storage_directory)
 }
 
 bool DataStorage::CreateFile(const std::string& file_name,
-                             const std::string& public_key) {
+                             const Bytes& public_key) {
     std::lock_guard<std::mutex> lock(_mu);
     if (_file_list.find(file_name) != _file_list.end()) {
         /* File already exists. */
         return false;
     }
 
-    Bytes public_key_bytes = Bytes(public_key.begin(), public_key.end());
-
-    _file_list.emplace(
-        file_name, new File(_storage_directory, file_name, public_key_bytes));
+    _file_list.emplace(file_name,
+                       new File(_storage_directory, file_name, public_key));
     return true;
 }
 
 bool DataStorage::WriteFile(const std::string& file_name,
                             uint32_t stripe_offset, uint32_t num_stripes,
-                            uint32_t version, const Bytes& block_data) {
+                            uint32_t block_idx, uint32_t version,
+                            const Bytes& block_data) {
     std::unique_lock<std::mutex> lock(_mu);
     if (_file_list.find(file_name) == _file_list.end()) {
         return false;
@@ -33,10 +32,13 @@ bool DataStorage::WriteFile(const std::string& file_name,
 
     auto file = _file_list[file_name];
     lock.unlock();
-    return file->WriteStripes(stripe_offset, num_stripes, version, block_data);
+    return file->WriteStripes(stripe_offset, num_stripes, block_idx, version,
+                              block_data);
 }
 
-Bytes DataStorage::ReadFile(const std::string& file_name, uint32_t version) {
+Bytes DataStorage::ReadFile(const std::string& file_name,
+                            uint32_t stripe_offset, uint32_t num_stripes,
+                            uint32_t version) {
     std::unique_lock<std::mutex> lock(_mu);
     if (_file_list.find(file_name) == _file_list.end()) {
         return Bytes{};
@@ -45,8 +47,7 @@ Bytes DataStorage::ReadFile(const std::string& file_name, uint32_t version) {
     auto file = _file_list[file_name];
     lock.unlock();
 
-    Bytes block_data = file->ReadVersion(version);
-    return block_data;
+    return file->ReadVersion(version, stripe_offset, num_stripes);
 }
 
 uint32_t DataStorage::GetLatestVersion(const std::string& file_name) {

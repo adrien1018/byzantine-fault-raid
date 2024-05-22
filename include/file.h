@@ -31,7 +31,7 @@ class File {
     std::mutex _mu;
     fs::path _directory;
     std::string _file_name;
-    Bytes _public_key;
+    SigningKey _public_key;
     uint32_t _version;
     std::map<uint32_t, UndoRecord> _update_record;
     std::thread _garbage_collection;
@@ -47,8 +47,10 @@ class File {
          const Bytes& public_key);
     ~File();
     bool WriteStripes(uint32_t stripe_offset, uint32_t num_stripes,
-                      uint32_t version, const Bytes& block_data);
-    Bytes ReadVersion(uint32_t version);
+                      uint32_t block_idx, uint32_t version,
+                      const Bytes& block_data);
+    Bytes ReadVersion(uint32_t version, uint32_t stripe_offset,
+                      uint32_t num_stripes);
     uint32_t Version();
     std::string FileName() const;
     Bytes PublicKey() const;

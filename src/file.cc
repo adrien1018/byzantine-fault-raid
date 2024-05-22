@@ -4,11 +4,13 @@
 #include <optional>
 #include <utility>
 
+#include "encode_decode.h"
+
 File::File(const std::string& directory, const std::string& file_name,
            const Bytes& public_key)
     : _directory(directory),
       _file_name(file_name),
-      _public_key(public_key),
+      _public_key(public_key, false),
       _version(0),
       _garbage_collection(&File::GarbageCollectRecord, this) {
     fs::path file_path = _directory / _file_name;
@@ -27,7 +29,17 @@ File::File(const std::string& directory, const std::string& file_name,
 File::~File() { _file_stream.close(); }
 
 bool File::WriteStripes(uint32_t stripe_offset, uint32_t num_stripes,
-                        uint32_t version, const Bytes& block_data) {
+                        uint32_t block_idx, uint32_t version,
+                        const Bytes& block_data) {
+    for (uint32_t i = 0; i < num_stripes; i++) {
+        const Bytes block =
+            Bytes(block.begin() + stripe_offset * BLOCK_SIZE,
+                  block.begin() + (stripe_offset + i + 1) * BLOCK_SIZE);
+        if (!VerifyBlock(block, block_idx, _public_key, _file_name,
+                         stripe_offset + i, version)) {
+            return false;
+        }
+    }
     std::lock_guard<std::mutex> lock(_mu);
 
     if (version != _version + 1) {
@@ -45,7 +57,8 @@ bool File::WriteStripes(uint32_t stripe_offset, uint32_t num_stripes,
     return true;
 }
 
-Bytes File::ReadVersion(uint32_t version) {
+Bytes File::ReadVersion(uint32_t version, uint32_t stripe_offset,
+                        uint32_t num_stripes) {
     std::lock_guard<std::mutex> lock(_mu);
 
     std::set<Segment> segments = ReconstructVersion(version);
@@ -53,22 +66,30 @@ Bytes File::ReadVersion(uint32_t version) {
         return {};
     }
 
-    uint32_t num_block = std::get<1>(*segments.rbegin());
-    Bytes block_data(num_block * BLOCK_SIZE);
+    Bytes block_data(num_stripes * BLOCK_SIZE);
 
     for (const auto& [start, end, version] : segments) {
+        if (stripe_offset >= end || stripe_offset + num_stripes <= start) {
+            continue;
+        }
+        uint32_t effective_start = std::max(start, stripe_offset);
+        uint32_t effective_end = std::min(end, stripe_offset + num_stripes);
         if (version == _version) {
-            _file_stream.seekg(start * BLOCK_SIZE);
-            _file_stream.read((char*)block_data.data() + start * BLOCK_SIZE,
-                              (end - start) * BLOCK_SIZE);
+            _file_stream.seekg(effective_start * BLOCK_SIZE);
+            _file_stream.read(
+                (char*)block_data.data() +
+                    (effective_start - stripe_offset) * BLOCK_SIZE,
+                (effective_end - effective_start) * BLOCK_SIZE);
         } else {
             auto& record = _update_record[version];
             const Bytes& version_block = record.old_image;
-            uint32_t image_offset = (start - record.stripe_offset) * BLOCK_SIZE;
-            uint32_t size = (end - start) * BLOCK_SIZE;
+            uint32_t image_offset =
+                (effective_start - record.stripe_offset) * BLOCK_SIZE;
+            uint32_t size = (effective_end - effective_start) * BLOCK_SIZE;
             std::copy(version_block.begin() + image_offset,
                       version_block.begin() + image_offset + size,
-                      block_data.begin() + start * BLOCK_SIZE);
+                      block_data.begin() +
+                          (effective_start - stripe_offset) * BLOCK_SIZE);
         }
     }
 
@@ -82,7 +103,7 @@ uint32_t File::Version() {
 
 std::string File::FileName() const { return _file_name; }
 
-Bytes File::PublicKey() const { return _public_key; }
+Bytes File::PublicKey() const { return _public_key.PublicKey(); }
 
 UndoRecord File::CreateUndoRecord(uint32_t stripe_offset,
                                   uint32_t num_stripes) {

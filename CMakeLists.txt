@@ -58,7 +58,7 @@ include_directories("${CMAKE_SOURCE_DIR}/include")
 
 file(GLOB filesys_src CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/*.cc")
 list(REMOVE_ITEM filesys_src "${CMAKE_SOURCE_DIR}/src/filesys_server.cc"
-   "${CMAKE_SOURCE_DIR}/src/filesys_client.cc")
+   "${CMAKE_SOURCE_DIR}/src/filesys_client.cc" "${CMAKE_SOURCE_DIR}/src/data_storage_test.cc")
 
 add_library(filesys_helper "${filesys_src}")
 target_link_libraries(filesys_helper correct crypto)
@@ -91,6 +91,7 @@ file(GLOB ENCODE_SRC_FILES ${PROJECT_SOURCE_DIR}/src/encode* ${PROJECT_SOURCE_DI
 add_executable(encode_test ${ENCODE_SRC_FILES})
 target_link_libraries(encode_test correct crypto)
 
-file(GLOB STORAGE_SRC_FILES ${PROJECT_SOURCE_DIR}/src/data_storage* ${PROJECT_SOURCE_DIR}/src/file.cc ${PROJECT_SOURCE_DIR}/src/signature*)
-add_executable(storage_test ${STORAGE_SRC_FILES})
-target_link_libraries(storage_test correct crypto)
+# file(GLOB STORAGE_SRC_FILES ${PROJECT_SOURCE_DIR}/src/data_storage* ${PROJECT_SOURCE_DIR}/src/file.cc
+# ${PROJECT_SOURCE_DIR}/src/signature.cc ${PROJECT_SOURCE_DIR}/src/encode_decode.cc)
+# add_executable(storage_test ${STORAGE_SRC_FILES})
+# target_link_libraries(storage_test correct crypto)

@@ -22,12 +22,12 @@ class DataStorage {
 
    public:
     explicit DataStorage(const fs::path& storage_directory);
-    bool CreateFile(const std::string& file_name,
-                    const std::string& public_key);
+    bool CreateFile(const std::string& file_name, const Bytes& public_key);
     bool WriteFile(const std::string& file_name, uint32_t stripe_offset,
-                   uint32_t num_stripe, uint32_t version,
+                   uint32_t num_stripe, uint32_t block_idx, uint32_t version,
                    const Bytes& block_data);
-    Bytes ReadFile(const std::string& file_name, uint32_t version);
+    Bytes ReadFile(const std::string& file_name, uint32_t stripe_offset,
+                   uint32_t num_stripe, uint32_t version);
     uint32_t GetLatestVersion(const std::string& file_name);
     std::vector<std::shared_ptr<File>> GetFileList();
 };
