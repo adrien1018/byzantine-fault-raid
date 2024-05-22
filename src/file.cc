@@ -1,5 +1,9 @@
 #include "file.h"
 
+#include <iterator>
+#include <optional>
+#include <utility>
+
 File::File(const std::string& directory, const std::string& file_name,
            const Bytes& public_key)
     : _directory(directory),
@@ -15,7 +19,7 @@ File::File(const std::string& directory, const std::string& file_name,
     }
     _file_stream.open(file_path, open_mode);
     if (_file_stream.fail()) {
-        exit(0);
+        throw std::runtime_error("Failed to open fail");
     }
     _garbage_collection.detach();
 }
@@ -31,7 +35,7 @@ bool File::WriteStripes(uint32_t stripe_offset, uint32_t num_stripes,
     }
 
     UndoRecord record = CreateUndoRecord(stripe_offset, num_stripes);
-    _update_record.push_back(record);
+    _update_record[_version] = record;
 
     _file_stream.seekp(stripe_offset * BLOCK_SIZE);
     _file_stream.write((char*)block_data.data(), block_data.size());
@@ -44,13 +48,27 @@ bool File::WriteStripes(uint32_t stripe_offset, uint32_t num_stripes,
 Bytes File::ReadVersion(uint32_t version) {
     std::lock_guard<std::mutex> lock(_mu);
 
-    _file_stream.seekg(0, std::ios::beg);
-    Bytes block_data = Bytes(std::istreambuf_iterator<char>(_file_stream),
-                             std::istreambuf_iterator<char>());
+    std::set<Segment> segments = ReconstructVersion(version);
+    if (segments.empty()) {
+        return {};
+    }
 
-    if (version < _version) {
-        if (!ReconstructVersion(version, block_data)) {
-            return Bytes{};
+    uint32_t num_block = std::get<1>(*segments.rbegin());
+    Bytes block_data(num_block * BLOCK_SIZE);
+
+    for (const auto& [start, end, version] : segments) {
+        if (version == _version) {
+            _file_stream.seekg(start * BLOCK_SIZE);
+            _file_stream.read((char*)block_data.data() + start * BLOCK_SIZE,
+                              (end - start) * BLOCK_SIZE);
+        } else {
+            auto& record = _update_record[version];
+            const Bytes& version_block = record.old_image;
+            uint32_t image_offset = (start - record.stripe_offset) * BLOCK_SIZE;
+            uint32_t size = (end - start) * BLOCK_SIZE;
+            std::copy(version_block.begin() + image_offset,
+                      version_block.begin() + image_offset + size,
+                      block_data.begin() + start * BLOCK_SIZE);
         }
     }
 
@@ -96,9 +114,10 @@ UndoRecord File::CreateUndoRecord(uint32_t stripe_offset,
     ofs.close();
 
     UndoRecord record{
+        .version = _version,
         .stripe_offset = stripe_offset,
         .num_stripes = num_stripes,
-        .version = _version,
+        .file_size = GetCurrentFileSize(),
         .old_image = buffer,
         .time_to_live = Clock::now() + std::chrono::seconds(30),
     };
@@ -108,30 +127,84 @@ UndoRecord File::CreateUndoRecord(uint32_t stripe_offset,
 
 void File::GarbageCollectRecord() {}
 
-bool File::ReconstructVersion(uint32_t version, Bytes& latest_version) {
-    if (_update_record.empty() || _update_record.front().version > version) {
+uint32_t File::GetCurrentFileSize() {
+    _file_stream.seekg(0, std::ios::end);
+    return _file_stream.tellg();
+}
+
+std::set<Segment> File::ReconstructVersion(uint32_t version) {
+    if (_update_record.empty() ||
+        _update_record.begin()->second.version > version) {
         /* Not enough information to recover the old version. */
-        return false;
+        return {};
     }
     auto latest_update = _update_record.rbegin();
-    while (latest_update->version >= version) {
-        uint32_t stripe_offset = latest_update->stripe_offset;
-        std::copy(latest_update->old_image.begin(),
-                  latest_update->old_image.end(),
-                  latest_version.begin() + stripe_offset * BLOCK_SIZE);
 
+    uint32_t file_size = GetCurrentFileSize();
+    if (file_size % BLOCK_SIZE) {
+        throw std::runtime_error("File size not on block boundary");
+    }
+    std::set<Segment> segments{{0, file_size / BLOCK_SIZE, _version}};
+    uint32_t version_block_size = file_size / BLOCK_SIZE;
+
+    while (latest_update->second.version >= version) {
         /* This operation assumes that each update only keeps the file size
          * the same or extends it, but never shrinks.*/
-        if (latest_update->old_image.size() <
-            latest_update->num_stripes * BLOCK_SIZE) {
-            latest_version.resize(latest_version.size() -
-                                  (latest_update->num_stripes * BLOCK_SIZE -
-                                   latest_update->old_image.size()));
+        std::optional<std::set<Segment>::iterator> start_remover = std::nullopt;
+        if (latest_update->second.version == version) {
+            version_block_size = latest_update->second.file_size / BLOCK_SIZE;
         }
+        uint32_t segment_start = latest_update->second.stripe_offset;
+        auto start_overlap = segments.lower_bound({segment_start, 0, 0});
+        if (start_overlap != segments.begin()) {
+            auto to_edit = std::prev(start_overlap);
+            const auto [prev_start, prev_end, prev_version] = *to_edit;
+            if (prev_end > segment_start) {
+                segments.emplace(prev_start, segment_start, prev_version);
+                start_remover = to_edit;
+            }
+        }
+
+        uint32_t segment_end = latest_update->second.stripe_offset +
+                               latest_update->second.num_stripes;
+        auto end_overlap = segments.lower_bound({segment_end, 0, 0});
+        if (end_overlap != segments.begin()) {
+            auto to_edit = std::prev(end_overlap);
+            const auto [prev_start, prev_end, prev_version] = *to_edit;
+            if (prev_end > segment_end) {
+                segments.emplace(segment_end, prev_end, prev_version);
+            }
+        }
+
+        if (start_remover.has_value()) {
+            segments.erase(start_remover.value());
+        }
+
+        while (start_overlap != end_overlap) {
+            start_overlap = segments.erase(start_overlap);
+        }
+        segments.emplace(segment_start, segment_end,
+                         latest_update->second.version);
         latest_update = std::next(latest_update);
     }
 
-    return true;
+    auto unused_segment = segments.lower_bound({version_block_size, 0, 0});
+    if (unused_segment != segments.begin()) {
+        auto to_edit = std::prev(unused_segment);
+        auto [prev_start, prev_end, prev_version] = *to_edit;
+        if (prev_end > version_block_size) {
+            if (prev_start != version_block_size) {
+                segments.emplace(prev_start, version_block_size, prev_version);
+            }
+            segments.erase(to_edit);
+        }
+    }
+
+    while (unused_segment != segments.end()) {
+        unused_segment = segments.erase(unused_segment);
+    }
+
+    return segments;
 }
 
 /* TODO: Garbage collect update record periodically. */

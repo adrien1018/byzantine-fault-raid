@@ -2,9 +2,10 @@
 #define _FILESYS_FILE_H
 
 #include <chrono>
-#include <deque>
 #include <fstream>
+#include <map>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 
@@ -14,11 +15,13 @@
 #define BLOCK_SIZE 128
 
 using Clock = std::chrono::steady_clock;
+using Segment = std::tuple<uint32_t, uint32_t, uint32_t>;
 
 struct UndoRecord {
+    uint32_t version;
     uint32_t stripe_offset;
     uint32_t num_stripes;
-    uint32_t version;
+    uint32_t file_size;
     Bytes old_image; /* TODO: Do we need to store this in memory or can we read
                         it from file. */
     Clock::time_point time_to_live;
@@ -30,13 +33,14 @@ class File {
     std::string _file_name;
     Bytes _public_key;
     uint32_t _version;
-    std::deque<UndoRecord> _update_record;
+    std::map<uint32_t, UndoRecord> _update_record;
     std::thread _garbage_collection;
     std::fstream _file_stream;
 
-    bool ReconstructVersion(uint32_t version, Bytes& latest_version);
+    std::set<Segment> ReconstructVersion(uint32_t version);
     UndoRecord CreateUndoRecord(uint32_t stripe_offset, uint32_t num_stripes);
     void GarbageCollectRecord();
+    uint32_t GetCurrentFileSize();
 
    public:
     File(const std::string& directory, const std::string& file_name,
