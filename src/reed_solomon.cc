@@ -108,11 +108,15 @@ std::vector<Bytes> RSEncode(uint8_t N, uint8_t D, size_t blocks, const uint8_t i
   }
   std::vector<GFInt> ins(deg);
   std::vector<Bytes> out(N, Bytes(blocks));
-  for (size_t i = 0; i < blocks; i++) {
-    for (uint8_t j = 0; j < deg; j++) out[j][i] = in[deg * i + j];
-    for (uint8_t x = deg; x < N; x++) {
+  for (uint8_t j = 0; j < deg; j++) {
+    memcpy(out[j].data(), in + j * blocks, blocks);
+  }
+  std::vector<GFInt> table_x(deg);
+  for (uint8_t x = deg; x < N; x++) {
+    for (uint8_t j = 0; j < deg; j++) table_x[j] = table[j] / (GFInt(x) - GFInt(j));
+    for (size_t i = 0; i < blocks; i++) {
       GFInt sum = 0;
-      for (uint8_t j = 0; j < deg; j++) sum += table[j] * GFInt(in[deg * i + j]) / (GFInt(x) - GFInt(j));
+      for (uint8_t j = 0; j < deg; j++) sum += table_x[j] * GFInt(in[j * blocks + i]);
       out[x][i] = ls[x-deg] * sum;
     }
   }
@@ -122,12 +126,10 @@ std::vector<Bytes> RSEncode(uint8_t N, uint8_t D, size_t blocks, const uint8_t i
 bool RSDecode(uint8_t N, uint8_t D, size_t blocks, const std::vector<Bytes>& in, const bool err[], uint8_t out[]) {
   uint8_t deg = N-D;
   size_t errs = std::count_if(err, err + deg, [](bool x){ return x; });
-  if (errs == 0) {
-    for (size_t i = 0; i < blocks; i++) {
-      for (uint8_t j = 0; j < deg; j++) out[i * deg + j] = in[j][i];
-    }
-    return true;
+  for (uint8_t j = 0; j < deg; j++) {
+    if (!err[j]) memcpy(out + j * blocks, in[j].data(), blocks);
   }
+  if (errs == 0) return true;
   std::vector<uint8_t> pos, err_pos;
   pos.reserve(deg);
   err_pos.reserve(errs);
@@ -147,16 +149,14 @@ bool RSDecode(uint8_t N, uint8_t D, size_t blocks, const std::vector<Bytes>& in,
   for (uint8_t i = 0; i < err_pos.size(); i++) {
     for (uint8_t k = 0; k < deg; k++) ls[i] *= GFInt(err_pos[i]) - GFInt(pos[k]);
   }
-  std::vector<GFInt> ins(deg);
-  for (size_t i = 0; i < blocks; i++) {
-    for (uint8_t k = 0; k < deg; k++) {
-      if (!err[k]) out[i * deg + k] = in[k][i];
-    }
-    for (uint8_t j = 0; j < err_pos.size(); j++) {
-      uint8_t x = err_pos[j];
+  std::vector<GFInt> table_x(deg);
+  for (uint8_t j = 0; j < err_pos.size(); j++) {
+    uint8_t x = err_pos[j];
+    for (uint8_t k = 0; k < deg; k++) table_x[k] = table[k] / (GFInt(x) - GFInt(pos[k]));
+    for (size_t i = 0; i < blocks; i++) {
       GFInt sum = 0;
-      for (uint8_t k = 0; k < deg; k++) sum += table[k] * GFInt(in[pos[k]][i]) / (GFInt(x) - GFInt(pos[k]));
-      out[i * deg + x] = ls[j] * sum;
+      for (uint8_t k = 0; k < deg; k++) sum += table_x[k] * GFInt(in[pos[k]][i]);
+      out[x * blocks + i] = ls[j] * sum;
     }
   }
   return true;
