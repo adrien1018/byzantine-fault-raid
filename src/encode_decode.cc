@@ -1,9 +1,7 @@
 #include "encode_decode.h"
 
 #include <cstring>
-extern "C" {
-#include <correct.h>
-}
+#include "reed_solomon.h"
 
 namespace {
 
@@ -34,21 +32,10 @@ std::vector<Bytes> Encode(
   }
   size_t block_size = raw_stripe.size() / stride;
   Bytes metadata = GenerateMetadata(filename, stripe_id, version);
-  std::vector<Bytes> blocks(n, Bytes(block_size + 1 + metadata.size()));
 
-  std::unique_ptr<correct_reed_solomon, void(*)(correct_reed_solomon*)> encoder(
-      correct_reed_solomon_create(correct_rs_primitive_polynomial_ccsds, 1, 1, d),
-      correct_reed_solomon_destroy);
-  { // encode loop
-    Bytes buffer(n);
-    for (size_t i = 0; i < block_size; i++) {
-      // the encode function is supposed to return the number of bytes write; however, it seems to always return 255
-      if (-1 == correct_reed_solomon_encode(encoder.get(), raw_stripe.data() + (i * stride), stride, buffer.data())) {
-        throw std::runtime_error("unexpected encode error");
-      }
-      for (int j = 0; j < n; j++) blocks[j][i] = buffer[j];
-    }
-  }
+  auto blocks = RSEncode(n, d, block_size, raw_stripe.data());
+  for (auto& block : blocks) block.resize(block_size + 1 + metadata.size());
+
   // signing loop
   for (int block_id = 0; block_id < n; block_id++) {
     Bytes& block = blocks[block_id];
@@ -80,44 +67,28 @@ Bytes Decode(
   size_t expected_block_size = block_size + SigningKey::kSignatureSize;
   Bytes metadata = GenerateMetadata(filename, stripe_id, version);
 
-  std::vector<uint8_t> is_valid_block(n);
-  std::vector<uint8_t> error_pos;
+  std::vector<uint8_t> is_err(n, true);
   { // signature verification
     // signed data: concat(block, block_id, metadata)
+    int num_correct = 0;
     Bytes validate_buffer(block_size + 1 + metadata.size());
     memcpy(validate_buffer.data() + block_size + 1, metadata.data(), metadata.size());
-    for (int block_id = 0; block_id < n && (int)error_pos.size() <= d; block_id++) {
+    for (int block_id = 0; block_id < n && block_id - num_correct <= d; block_id++) {
       const Bytes& block = blocks[block_id];
-      if (block.size() != expected_block_size) {
-        error_pos.push_back(block_id);
-        continue;
-      }
+      if (block.size() != expected_block_size) continue;
       memcpy(validate_buffer.data(), block.data(), block_size);
       validate_buffer[block_size] = block_id;
       if (public_key.Verify(validate_buffer.data(), validate_buffer.size(), block.data() + block_size)) {
-        is_valid_block[block_id] = true;
-      } else {
-        error_pos.push_back(block_id);
+        is_err[block_id] = false;
+        num_correct++;
       }
     }
-    if ((int)error_pos.size() > d) throw DecodeError("Too many invalid blocks");
+    if (n - num_correct > d) throw DecodeError("Too many invalid blocks");
   }
-  std::unique_ptr<correct_reed_solomon, void(*)(correct_reed_solomon*)> encoder(
-      correct_reed_solomon_create(correct_rs_primitive_polynomial_ccsds, 1, 1, d),
-      correct_reed_solomon_destroy);
 
   Bytes ret(raw_stripe_size);
-  { // decode loop
-    Bytes buffer(n);
-    for (size_t i = 0; i < block_size; i++) {
-      for (int j = 0; j < n; j++) {
-        if (is_valid_block[j]) buffer[j] = blocks[j][i];
-      }
-      if ((int)stride != correct_reed_solomon_decode_with_erasures(
-          encoder.get(), buffer.data(), n, error_pos.data(), error_pos.size(), ret.data() + (i * stride))) {
-        throw std::runtime_error("unexpected decode error");
-      }
-    }
+  if (!RSDecode(n, d, block_size, blocks, (const bool*)is_err.data(), ret.data())) {
+    throw std::runtime_error("unexpected decode error");
   }
   return ret;
 }
