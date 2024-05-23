@@ -2,8 +2,8 @@
 
 #include <algorithm>
 
-DataStorage::DataStorage(const fs::path& storage_directory)
-    : _storage_directory(storage_directory) {
+DataStorage::DataStorage(const fs::path& storage_directory, uint32_t block_size)
+    : _storage_directory(storage_directory), _block_size(block_size) {
     /* If directory already existed then nothing happens. */
     fs::create_directory(_storage_directory);
 }
@@ -16,8 +16,8 @@ bool DataStorage::CreateFile(const std::string& file_name,
         return false;
     }
 
-    _file_list.emplace(file_name,
-                       new File(_storage_directory, file_name, public_key));
+    _file_list.emplace(file_name, new File(_storage_directory, file_name,
+                                           public_key, _block_size));
     return true;
 }
 

@@ -7,12 +7,13 @@
 #include "encode_decode.h"
 
 File::File(const std::string& directory, const std::string& file_name,
-           const Bytes& public_key)
+           const Bytes& public_key, uint32_t _block_size)
     : _directory(directory),
       _file_name(file_name),
       _public_key(public_key, false),
       _version(0),
-      _garbage_collection(&File::GarbageCollectRecord, this) {
+      _garbage_collection(&File::GarbageCollectRecord, this),
+      _block_size(_block_size) {
     fs::path file_path = _directory / _file_name;
     std::fstream::openmode open_mode =
         std::fstream::binary | std::fstream::in | std::fstream::out;
@@ -32,9 +33,8 @@ bool File::WriteStripes(uint32_t stripe_offset, uint32_t num_stripes,
                         uint32_t block_idx, uint32_t version,
                         const Bytes& block_data) {
     for (uint32_t i = 0; i < num_stripes; i++) {
-        const Bytes block =
-            Bytes(block.begin() + stripe_offset * BLOCK_SIZE,
-                  block.begin() + (stripe_offset + i + 1) * BLOCK_SIZE);
+        const Bytes block = Bytes(block_data.begin() + i * _block_size,
+                                  block_data.begin() + (i + 1) * _block_size);
         if (!VerifyBlock(block, block_idx, _public_key, _file_name,
                          stripe_offset + i, version)) {
             return false;
@@ -49,7 +49,7 @@ bool File::WriteStripes(uint32_t stripe_offset, uint32_t num_stripes,
     UndoRecord record = CreateUndoRecord(stripe_offset, num_stripes);
     _update_record[_version] = record;
 
-    _file_stream.seekp(stripe_offset * BLOCK_SIZE);
+    _file_stream.seekp(stripe_offset * _block_size);
     _file_stream.write((char*)block_data.data(), block_data.size());
     _file_stream.flush();
     _version++;
@@ -66,7 +66,7 @@ Bytes File::ReadVersion(uint32_t version, uint32_t stripe_offset,
         return {};
     }
 
-    Bytes block_data(num_stripes * BLOCK_SIZE);
+    Bytes block_data(num_stripes * _block_size);
 
     for (const auto& [start, end, version] : segments) {
         if (stripe_offset >= end || stripe_offset + num_stripes <= start) {
@@ -75,21 +75,21 @@ Bytes File::ReadVersion(uint32_t version, uint32_t stripe_offset,
         uint32_t effective_start = std::max(start, stripe_offset);
         uint32_t effective_end = std::min(end, stripe_offset + num_stripes);
         if (version == _version) {
-            _file_stream.seekg(effective_start * BLOCK_SIZE);
+            _file_stream.seekg(effective_start * _block_size);
             _file_stream.read(
                 (char*)block_data.data() +
-                    (effective_start - stripe_offset) * BLOCK_SIZE,
-                (effective_end - effective_start) * BLOCK_SIZE);
+                    (effective_start - stripe_offset) * _block_size,
+                (effective_end - effective_start) * _block_size);
         } else {
             auto& record = _update_record[version];
             const Bytes& version_block = record.old_image;
             uint32_t image_offset =
-                (effective_start - record.stripe_offset) * BLOCK_SIZE;
-            uint32_t size = (effective_end - effective_start) * BLOCK_SIZE;
+                (effective_start - record.stripe_offset) * _block_size;
+            uint32_t size = (effective_end - effective_start) * _block_size;
             std::copy(version_block.begin() + image_offset,
                       version_block.begin() + image_offset + size,
                       block_data.begin() +
-                          (effective_start - stripe_offset) * BLOCK_SIZE);
+                          (effective_start - stripe_offset) * _block_size);
         }
     }
 
@@ -107,8 +107,6 @@ Bytes File::PublicKey() const { return _public_key.PublicKey(); }
 
 UndoRecord File::CreateUndoRecord(uint32_t stripe_offset,
                                   uint32_t num_stripes) {
-    /* TODO: what if the current update is to extend the file? i.e., the undo
-     * record is empty.*/
     std::ofstream ofs;
     fs::path undo_log =
         _directory / (_file_name + "_version" + std::to_string(_version));
@@ -121,12 +119,12 @@ UndoRecord File::CreateUndoRecord(uint32_t stripe_offset,
     Bytes buffer;
     _file_stream.seekg(0, std::ios::end);
     std::streampos file_size = _file_stream.tellg();
-    if (stripe_offset * BLOCK_SIZE < file_size) {
+    if (stripe_offset * _block_size < file_size) {
         uint32_t end = std::min(static_cast<uint32_t>(file_size),
-                                (stripe_offset + num_stripes) * BLOCK_SIZE);
-        uint32_t read_size = end - (stripe_offset * BLOCK_SIZE);
+                                (stripe_offset + num_stripes) * _block_size);
+        uint32_t read_size = end - (stripe_offset * _block_size);
         if (read_size) {
-            _file_stream.seekg(stripe_offset * BLOCK_SIZE);
+            _file_stream.seekg(stripe_offset * _block_size);
             buffer.resize(read_size);
             _file_stream.read((char*)buffer.data(), read_size);
             ofs.write((char*)buffer.data(), read_size);
@@ -152,7 +150,6 @@ uint32_t File::GetCurrentFileSize() {
     _file_stream.seekg(0, std::ios::end);
     return _file_stream.tellg();
 }
-
 std::set<Segment> File::ReconstructVersion(uint32_t version) {
     if (_update_record.empty() ||
         _update_record.begin()->second.version > version) {
@@ -162,18 +159,18 @@ std::set<Segment> File::ReconstructVersion(uint32_t version) {
     auto latest_update = _update_record.rbegin();
 
     uint32_t file_size = GetCurrentFileSize();
-    if (file_size % BLOCK_SIZE) {
+    if (file_size % _block_size) {
         throw std::runtime_error("File size not on block boundary");
     }
-    std::set<Segment> segments{{0, file_size / BLOCK_SIZE, _version}};
-    uint32_t version_block_size = file_size / BLOCK_SIZE;
+    std::set<Segment> segments{{0, file_size / _block_size, _version}};
+    uint32_t version__block_size = file_size / _block_size;
 
     while (latest_update->second.version >= version) {
         /* This operation assumes that each update only keeps the file size
          * the same or extends it, but never shrinks.*/
         std::optional<std::set<Segment>::iterator> start_remover = std::nullopt;
         if (latest_update->second.version == version) {
-            version_block_size = latest_update->second.file_size / BLOCK_SIZE;
+            version__block_size = latest_update->second.file_size / _block_size;
         }
         uint32_t segment_start = latest_update->second.stripe_offset;
         auto start_overlap = segments.lower_bound({segment_start, 0, 0});
@@ -209,13 +206,13 @@ std::set<Segment> File::ReconstructVersion(uint32_t version) {
         latest_update = std::next(latest_update);
     }
 
-    auto unused_segment = segments.lower_bound({version_block_size, 0, 0});
+    auto unused_segment = segments.lower_bound({version__block_size, 0, 0});
     if (unused_segment != segments.begin()) {
         auto to_edit = std::prev(unused_segment);
         auto [prev_start, prev_end, prev_version] = *to_edit;
-        if (prev_end > version_block_size) {
-            if (prev_start != version_block_size) {
-                segments.emplace(prev_start, version_block_size, prev_version);
+        if (prev_end > version__block_size) {
+            if (prev_start != version__block_size) {
+                segments.emplace(prev_start, version__block_size, prev_version);
             }
             segments.erase(to_edit);
         }

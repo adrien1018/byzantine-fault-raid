@@ -40,7 +40,7 @@ class FilesysImpl final : public Filesys::Service {
     explicit FilesysImpl(const Config& config, const fs::path& local_storage,
                          uint32_t server_idx)
         : _config(config),
-          _data_storage(local_storage),
+          _data_storage(local_storage, config.block_size),
           _server_idx(server_idx) {}
 
     Status CreateFile(ServerContext* context, const CreateFileArgs* args,

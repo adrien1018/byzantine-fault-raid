@@ -11,9 +11,6 @@
 
 #include "signature.h"
 
-/* TODO: Pass block size here. */
-#define BLOCK_SIZE 128
-
 using Clock = std::chrono::steady_clock;
 using Segment = std::tuple<uint32_t, uint32_t, uint32_t>;
 
@@ -36,6 +33,7 @@ class File {
     std::map<uint32_t, UndoRecord> _update_record;
     std::thread _garbage_collection;
     std::fstream _file_stream;
+    const uint32_t _block_size;
 
     std::set<Segment> ReconstructVersion(uint32_t version);
     UndoRecord CreateUndoRecord(uint32_t stripe_offset, uint32_t num_stripes);
@@ -44,7 +42,7 @@ class File {
 
    public:
     File(const std::string& directory, const std::string& file_name,
-         const Bytes& public_key);
+         const Bytes& public_key, uint32_t block_size);
     ~File();
     bool WriteStripes(uint32_t stripe_offset, uint32_t num_stripes,
                       uint32_t block_idx, uint32_t version,

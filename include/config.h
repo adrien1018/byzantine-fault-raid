@@ -8,7 +8,7 @@
 struct Config {
     uint32_t num_malicious;
     uint32_t num_faulty;
-    uint32_t stripe_size;
+    uint32_t block_size;
     std::vector<std::string> servers;
 };
 

@@ -9,9 +9,7 @@ Config ParseConfig(const std::string& config_file) {
     config.num_malicious =
         toml_config["num_malicious"].value<uint32_t>().value();
     config.num_faulty = toml_config["num_faulty"].value<uint32_t>().value();
-    config.stripe_size = toml_config["stripe_size"].value<uint32_t>().value();
-
-    /* TODO: verify stripe size validity. */
+    config.block_size = toml_config["block_size"].value<uint32_t>().value();
 
     auto servers_toml = toml_config["servers"].as_array();
 
