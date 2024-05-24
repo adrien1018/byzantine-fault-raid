@@ -5,7 +5,6 @@
 #include <grpcpp/server_context.h>
 
 #include <filesystem>
-#include <iostream>
 #include <string>
 
 #include "CLI11.hh"
@@ -74,7 +73,6 @@ class FilesysImpl final : public Filesys::Service {
 
     Status WriteBlocks(ServerContext* context, const WriteBlocksArgs* args,
                        google::protobuf::Empty* _) override {
-        /* TODO: Verify signature */
         uint32_t version = args->version();
         std::string file_name = args->file_name();
         std::string block_data_str = args->block_data();
@@ -120,7 +118,7 @@ class FilesysImpl final : public Filesys::Service {
 /* Entry point of the service. Start the service. */
 static void RunServer(const std::string& ip_address, uint16_t port,
                       const Config& config, const fs::path& local_storage) {
-    std::string server_address{ip_address + std::to_string(port)};
+    std::string server_address{ip_address + ":" + std::to_string(port)};
 
     uint32_t server_idx = config.servers.size();
     for (uint32_t i = 0; i < config.servers.size(); i++) {
