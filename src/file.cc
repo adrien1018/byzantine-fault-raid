@@ -13,6 +13,7 @@ File::File(const std::string& directory, const std::string& file_name,
       _public_key(public_key, false),
       _version(0),
       _garbage_collection(&File::GarbageCollectRecord, this),
+      _file_removed(false),
       _block_size(_block_size) {
     fs::path file_path = _directory / _file_name;
     std::fstream::openmode open_mode =
@@ -24,10 +25,13 @@ File::File(const std::string& directory, const std::string& file_name,
     if (_file_stream.fail()) {
         throw std::runtime_error("Failed to open fail");
     }
-    _garbage_collection.detach();
 }
 
-File::~File() { _file_stream.close(); }
+File::~File() {
+    _file_removed.store(true);
+    _file_stream.close();
+    _garbage_collection.join();
+}
 
 bool File::WriteStripes(uint32_t stripe_offset, uint32_t num_stripes,
                         uint32_t block_idx, uint32_t version,
@@ -92,7 +96,6 @@ Bytes File::ReadVersion(uint32_t version, uint32_t stripe_offset,
                           (effective_start - stripe_offset) * _block_size);
         }
     }
-
     return block_data;
 }
 
@@ -144,15 +147,37 @@ UndoRecord File::CreateUndoRecord(uint32_t stripe_offset,
     return record;
 }
 
-void File::GarbageCollectRecord() {}
+void File::GarbageCollectRecord() {
+    std::unique_lock<std::mutex> lock(_mu, std::defer_lock);
+    while (!_file_removed.load()) {
+        lock.lock();
+        while (!_update_record.empty() &&
+               _update_record.begin()->second.time_to_live <= Clock::now()) {
+            fs::path undo_log =
+                _directory /
+                (_file_name + "_version" +
+                 std::to_string(_update_record.begin()->second.version));
+            fs::remove(undo_log);
+            _update_record.erase(_update_record.begin());
+        }
+        auto wake_up_time = Clock::now() + std::chrono::seconds(30);
+        if (!_update_record.empty()) {
+            wake_up_time = _update_record.begin()->second.time_to_live;
+        }
+        lock.unlock();
+        std::this_thread::sleep_until(Clock::now() +
+                                      std::chrono::milliseconds(200));
+    }
+}
 
 uint32_t File::GetCurrentFileSize() {
     _file_stream.seekg(0, std::ios::end);
     return _file_stream.tellg();
 }
 std::set<Segment> File::ReconstructVersion(uint32_t version) {
-    if (_update_record.empty() ||
-        _update_record.begin()->second.version > version) {
+    if (version != _version &&
+        (_update_record.empty() ||
+         _update_record.begin()->second.version > version)) {
         /* Not enough information to recover the old version. */
         return {};
     }
@@ -164,8 +189,8 @@ std::set<Segment> File::ReconstructVersion(uint32_t version) {
     }
     std::set<Segment> segments{{0, file_size / _block_size, _version}};
     uint32_t version__block_size = file_size / _block_size;
-
-    while (latest_update->second.version >= version) {
+    while (latest_update != _update_record.rend() &&
+           latest_update->second.version >= version) {
         /* This operation assumes that each update only keeps the file size
          * the same or extends it, but never shrinks.*/
         std::optional<std::set<Segment>::iterator> start_remover = std::nullopt;
@@ -224,5 +249,3 @@ std::set<Segment> File::ReconstructVersion(uint32_t version) {
 
     return segments;
 }
-
-/* TODO: Garbage collect update record periodically. */

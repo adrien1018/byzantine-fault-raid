@@ -47,7 +47,7 @@ Bytes RandomStripe(const std::string& file_name, int version, int stripe_offset,
 }
 
 void TestGetFileList() {
-    std::cout << "Running TestGetFileList...   ";
+    std::cout << "Running TestGetFileList...   " << std::flush;
     std::string test_dir = "TestGetFileList";
     std::vector<std::string> file_list{"a", "b", "c", "d"};
     DataStorage storage(test_dir, BLOCK_SIZE);
@@ -74,7 +74,7 @@ void TestGetFileList() {
 }
 
 void TestSimpleReadWrite() {
-    std::cout << "Running TestSimpleReadWrite...   ";
+    std::cout << "Running TestSimpleReadWrite...   " << std::flush;
     std::string test_dir = "TestSimpleReadWrite";
     DataStorage storage(test_dir, BLOCK_SIZE);
 
@@ -90,7 +90,7 @@ void TestSimpleReadWrite() {
 }
 
 void TestGetLatestVersion() {
-    std::cout << "Running TestGetLatestVersion...   ";
+    std::cout << "Running TestGetLatestVersion...   " << std::flush;
     std::string test_dir = "TestGetLatestVersion";
     DataStorage storage(test_dir, BLOCK_SIZE);
 
@@ -118,7 +118,7 @@ void TestGetLatestVersion() {
 }
 
 void TestExtendFile() {
-    std::cout << "Running TestExtendFile...   ";
+    std::cout << "Running TestExtendFile...   " << std::flush;
     std::string test_dir = "TestExtendFile";
     DataStorage storage(test_dir, BLOCK_SIZE);
 
@@ -146,7 +146,7 @@ void TestExtendFile() {
 }
 
 void TestOverlapExtend() {
-    std::cout << "Running TestOverlapExtend...   ";
+    std::cout << "Running TestOverlapExtend...   " << std::flush;
     std::string test_dir = "TestOverlapExtend";
     DataStorage storage(test_dir, BLOCK_SIZE);
 
@@ -176,7 +176,7 @@ void TestOverlapExtend() {
 }
 
 void TestSimpleMultipleWrite() {
-    std::cout << "Running TestSimpleMultipleWrite...   ";
+    std::cout << "Running TestSimpleMultipleWrite...   " << std::flush;
     std::string test_dir = "TestSimpleMultipleWrite";
     DataStorage storage(test_dir, BLOCK_SIZE);
 
@@ -207,11 +207,17 @@ void TestSimpleMultipleWrite() {
     assert(storage.WriteFile(file_name, 0, 10, 0, 4, version4) &&
            "Write four failed");
 
-    assert(version4 == storage.ReadFile(file_name, 0, 10, 4) &&
+    assert(Bytes(version4.begin() + 5 * BLOCK_SIZE,
+                 version4.begin() + 8 * BLOCK_SIZE) ==
+               storage.ReadFile(file_name, 5, 3, 4) &&
            "Version 4 mismatched");
-    assert(version3 == storage.ReadFile(file_name, 0, 10, 3) &&
+    assert(Bytes(version3.begin() + 2 * BLOCK_SIZE,
+                 version3.begin() + 8 * BLOCK_SIZE) ==
+               storage.ReadFile(file_name, 2, 6, 3) &&
            "Version 3 mismatched");
-    assert(version2 == storage.ReadFile(file_name, 0, 10, 2) &&
+    assert(Bytes(version2.begin() + 3 * BLOCK_SIZE,
+                 version2.begin() + 7 * BLOCK_SIZE) ==
+               storage.ReadFile(file_name, 3, 4, 2) &&
            "Version 2 mismatched");
     assert(version1 == storage.ReadFile(file_name, 0, 10, 1) &&
            "Version 1 mismatched");
@@ -221,7 +227,7 @@ void TestSimpleMultipleWrite() {
 }
 
 void TestMultipleExtendWrite() {
-    std::cout << "Running TestSimpleMultipleWrite...   ";
+    std::cout << "Running TestSimpleMultipleWrite...   " << std::flush;
     std::string test_dir = "TestSimpleMultipleWrite";
     DataStorage storage(test_dir, BLOCK_SIZE);
 
@@ -255,6 +261,48 @@ void TestMultipleExtendWrite() {
     fs::remove_all(test_dir);
 }
 
+void TestGarbageCollection() {
+    std::cout << "Running TestGarbageCollection...   " << std::flush;
+    std::string test_dir = "TestGarbageCollection";
+    DataStorage storage(test_dir, BLOCK_SIZE);
+
+    const std::string file_name{"temp"};
+    storage.CreateFile(file_name, public_key);
+    Bytes version1 = RandomStripe(file_name, 1, 0, 5);
+    assert(storage.WriteFile(file_name, 0, 5, 0, 1, version1) &&
+           "Write first failed");
+    assert(Bytes(version1.begin() + BLOCK_SIZE,
+                 version1.begin() + 3 * BLOCK_SIZE) ==
+           storage.ReadFile(file_name, 1, 2, 1));
+
+    Bytes version2 = RandomStripe(file_name, 2, 0, 10);
+    assert(storage.WriteFile(file_name, 0, 10, 0, 2, version2) &&
+           "Write second filed");
+
+    std::this_thread::sleep_for(std::chrono::seconds(30) +
+                                std::chrono::seconds(1));
+    assert(storage.ReadFile(file_name, 0, 5, 1).empty() &&
+           "Version 1 not deleted");
+
+    Bytes version3 = RandomStripe(file_name, 3, 4, 12);
+    assert(storage.WriteFile(file_name, 4, 12, 0, 3, version3) &&
+           "Write third failed");
+
+    assert(version2 == storage.ReadFile(file_name, 0, 10, 2));
+    std::this_thread::sleep_for(std::chrono::seconds(30) +
+                                std::chrono::seconds(1));
+    assert(storage.ReadFile(file_name, 0, 10, 2).empty() &&
+           "Version 2 not deleted");
+    assert(version3 == storage.ReadFile(file_name, 4, 12, 3));
+
+    std::cout << "Passed" << std::endl;
+    fs::remove_all(test_dir);
+}
+
+void TestConcurrentReadWrite() {}
+
+void TestStorageBackup() {}
+
 int main() {
     SetKey();
     TestGetFileList();
@@ -264,4 +312,5 @@ int main() {
     TestOverlapExtend();
     TestSimpleMultipleWrite();
     TestMultipleExtendWrite();
+    TestGarbageCollection();
 }

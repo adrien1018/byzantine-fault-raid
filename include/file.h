@@ -1,6 +1,7 @@
 #ifndef _FILESYS_FILE_H
 #define _FILESYS_FILE_H
 
+#include <atomic>
 #include <chrono>
 #include <fstream>
 #include <map>
@@ -33,6 +34,7 @@ class File {
     std::map<uint32_t, UndoRecord> _update_record;
     std::thread _garbage_collection;
     std::fstream _file_stream;
+    std::atomic<bool> _file_removed;
     const uint32_t _block_size;
 
     std::set<Segment> ReconstructVersion(uint32_t version);
