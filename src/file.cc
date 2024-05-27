@@ -175,6 +175,10 @@ uint32_t File::GetCurrentFileSize() {
     return _file_stream.tellg();
 }
 std::set<Segment> File::ReconstructVersion(uint32_t version) {
+    if (version > _version) {
+        /* The version is higher than the current version. */
+        return {};
+    }
     if (version != _version &&
         (_update_record.empty() ||
          _update_record.begin()->second.version > version)) {

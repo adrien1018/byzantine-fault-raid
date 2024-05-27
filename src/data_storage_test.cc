@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <thread>
 
 #include "encode_decode.h"
 #include "signature.h"
@@ -299,7 +300,62 @@ void TestGarbageCollection() {
     fs::remove_all(test_dir);
 }
 
-void TestConcurrentReadWrite() {}
+void TestConcurrentReadWrite() {
+    std::cout << "Running TestConcurrentReadWrite...   " << std::flush;
+    std::string test_dir = "TestConcurrentReadWrite";
+    DataStorage storage(test_dir, BLOCK_SIZE);
+
+    const uint32_t num_readers = 10;
+    const uint32_t max_version = 5;
+    std::vector<std::vector<Bytes>> response(num_readers,
+                                             std::vector<Bytes>(max_version));
+    std::vector<Bytes> answers(max_version);
+    std::vector<std::thread> readers;
+    const std::string file_name{"temp"};
+
+    auto Reader = [&](int idx) {
+        for (uint32_t i = 0; i < max_version; i++) {
+            Bytes content;
+            do {
+                content = storage.ReadFile(file_name, 0, 1, i + 1);
+            } while (content.empty());
+            response[idx][i] = content;
+            std::this_thread::sleep_for(std::chrono::seconds(5));
+        }
+
+        std::this_thread::sleep_for(std::chrono::seconds(30) +
+                                    std::chrono::seconds(1));
+        for (uint32_t i = 0; i < max_version - 1; i++) {
+            assert(storage.ReadFile(file_name, 0, 1, i + 1).empty());
+        }
+        assert(storage.ReadFile(file_name, 0, 1, max_version) ==
+               response[idx][max_version - 1]);
+    };
+
+    storage.CreateFile(file_name, public_key);
+    for (uint32_t i = 0; i < num_readers; i++) {
+        readers.emplace_back(std::thread(Reader, i));
+    }
+
+    for (uint32_t i = 0; i < max_version; i++) {
+        answers[i] = RandomStripe(file_name, i + 1, 0, 1);
+        assert(storage.WriteFile(file_name, 0, 1, 0, i + 1, answers[i]));
+        std::this_thread::sleep_for(std::chrono::seconds(5));
+    }
+
+    for (uint32_t i = 0; i < num_readers; i++) {
+        readers[i].join();
+    }
+
+    for (uint32_t i = 0; i < num_readers; i++) {
+        for (uint32_t j = 0; j < max_version; j++) {
+            assert(answers[j] == response[i][j]);
+        }
+    }
+
+    std::cout << "Passed" << std::endl;
+    fs::remove_all(test_dir);
+}
 
 void TestStorageBackup() {}
 
@@ -313,4 +369,5 @@ int main() {
     TestSimpleMultipleWrite();
     TestMultipleExtendWrite();
     TestGarbageCollection();
+    TestConcurrentReadWrite();
 }
