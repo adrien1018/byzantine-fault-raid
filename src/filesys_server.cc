@@ -48,9 +48,13 @@ class FilesysImpl final : public Filesys::Service {
                       google::protobuf::Empty* _) override {
         std::string file_name = args->file_name();
         std::string public_key = args->public_key();
-        _data_storage.CreateFile(file_name,
-                                 Bytes(public_key.begin(), public_key.end()));
-        return Status::OK;
+        if (_data_storage.CreateFile(
+                file_name, Bytes(public_key.begin(), public_key.end()))) {
+            return Status::OK;
+        } else {
+            return grpc::Status(grpc::StatusCode::ALREADY_EXISTS,
+                                "File already existed.");
+        }
     }
 
     Status ReadBlocks(ServerContext* context, const ReadBlocksArgs* args,
@@ -122,8 +126,8 @@ class FilesysImpl final : public Filesys::Service {
         return Status::OK;
     }
 
-    Status DeleteFile(ServerContext* context,
-                      const DeleteFileArgs* args) override {
+    Status DeleteFile(ServerContext* context, const DeleteFileArgs* args,
+                      google::protobuf::Empty* _) override {
         return Status::OK;
     }
 };
