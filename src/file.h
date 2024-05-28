@@ -15,14 +15,21 @@
 using Clock = std::chrono::steady_clock;
 using Segment = std::tuple<uint32_t, uint32_t, uint32_t>;
 
+struct Metadata {
+    Bytes public_key;
+    uint64_t file_size;
+};
+
 struct UndoRecord {
     uint32_t version;
     uint32_t stripe_offset;
     uint32_t num_stripes;
-    uint32_t file_size;
-    Bytes old_image; /* TODO: Do we need to store this in memory or can we read
-                        it from file. */
+    uint32_t stripe_size; /* The number of stripes in this version times
+                             block_size. */
+    Bytes old_image;
     Clock::time_point time_to_live;
+    // Metadata metadata;
+    // bool deleted;
 };
 
 class File {
@@ -40,7 +47,7 @@ class File {
     std::set<Segment> ReconstructVersion(uint32_t version);
     UndoRecord CreateUndoRecord(uint32_t stripe_offset, uint32_t num_stripes);
     void GarbageCollectRecord();
-    uint32_t GetCurrentFileSize();
+    uint32_t GetCurrentStripeSize();
 
    public:
     File(const std::string& directory, const std::string& file_name,
@@ -48,7 +55,7 @@ class File {
     ~File();
     bool WriteStripes(uint32_t stripe_offset, uint32_t num_stripes,
                       uint32_t block_idx, uint32_t version,
-                      const Bytes& block_data);
+                      const Bytes& block_data, const Metadata& metadata);
     Bytes ReadVersion(uint32_t version, uint32_t stripe_offset,
                       uint32_t num_stripes);
     uint32_t Version();

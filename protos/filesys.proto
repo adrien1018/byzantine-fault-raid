@@ -11,11 +11,13 @@ service Filesys {
 
   rpc WriteBlocks(WriteBlocksArgs) returns (google.protobuf.Empty) {}
 
-  rpc GetFileList(google.protobuf.Empty) returns (stream GetFileListReply) {}
+  rpc GetFileList(GetFileListArgs) returns (stream GetFileListReply) {}
 
   rpc GetUpdateLog(GetUpdateLogArgs) returns (stream GetUpdateLogReply) {}
 
   rpc HeartBeat(google.protobuf.Empty) returns (stream HeartBeatReply) {}
+
+  rpc DeleteFile(DeleteFileArgs) returns (google.protobuf.Empty) {}
 }
 
 message CreateFileArgs {
@@ -30,6 +32,11 @@ message ReadBlocksArgs {
   optional uint32 version = 4;
 }
 
+message Metadata {
+  bytes public_key = 1;
+  uint64 file_size = 2;
+}
+
 message ReadBlocksReply {
   bytes block_data = 1;
   uint32 version = 2;
@@ -41,13 +48,18 @@ message WriteBlocksArgs {
   uint32 num_stripes = 3;
   uint32 version = 4;
   bytes block_data = 5;
+  Metadata metadata = 6;
 }
 
+message GetFileListArgs {
+  optional bool metadata = 1;
+  optional string file_name = 2;
+}
 
 message GetFileListReply {
   string file_name = 1;
-  bytes public_key = 2;
-  uint32 version = 3;
+  uint32 version = 2;
+  optional Metadata metadata = 3;
 }
 
 message GetUpdateLogArgs {
@@ -64,4 +76,8 @@ message GetUpdateLogReply {
 message HeartBeatReply {
   string file_name = 1;
   uint32 version = 2;
+}
+
+message DeleteFileArgs {
+  string file_name = 1;
 }

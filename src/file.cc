@@ -35,7 +35,7 @@ File::~File() {
 
 bool File::WriteStripes(uint32_t stripe_offset, uint32_t num_stripes,
                         uint32_t block_idx, uint32_t version,
-                        const Bytes& block_data) {
+                        const Bytes& block_data, const Metadata& metadata) {
     for (uint32_t i = 0; i < num_stripes; i++) {
         const Bytes block = Bytes(block_data.begin() + i * _block_size,
                                   block_data.begin() + (i + 1) * _block_size);
@@ -139,7 +139,7 @@ UndoRecord File::CreateUndoRecord(uint32_t stripe_offset,
         .version = _version,
         .stripe_offset = stripe_offset,
         .num_stripes = num_stripes,
-        .file_size = GetCurrentFileSize(),
+        .stripe_size = GetCurrentStripeSize(),
         .old_image = buffer,
         .time_to_live = Clock::now() + std::chrono::seconds(30),
     };
@@ -160,17 +160,13 @@ void File::GarbageCollectRecord() {
             fs::remove(undo_log);
             _update_record.erase(_update_record.begin());
         }
-        auto wake_up_time = Clock::now() + std::chrono::seconds(30);
-        if (!_update_record.empty()) {
-            wake_up_time = _update_record.begin()->second.time_to_live;
-        }
         lock.unlock();
         std::this_thread::sleep_until(Clock::now() +
                                       std::chrono::milliseconds(200));
     }
 }
 
-uint32_t File::GetCurrentFileSize() {
+uint32_t File::GetCurrentStripeSize() {
     _file_stream.seekg(0, std::ios::end);
     return _file_stream.tellg();
 }
@@ -187,7 +183,7 @@ std::set<Segment> File::ReconstructVersion(uint32_t version) {
     }
     auto latest_update = _update_record.rbegin();
 
-    uint32_t file_size = GetCurrentFileSize();
+    uint32_t file_size = GetCurrentStripeSize();
     if (file_size % _block_size) {
         throw std::runtime_error("File size not on block boundary");
     }
@@ -199,7 +195,8 @@ std::set<Segment> File::ReconstructVersion(uint32_t version) {
          * the same or extends it, but never shrinks.*/
         std::optional<std::set<Segment>::iterator> start_remover = std::nullopt;
         if (latest_update->second.version == version) {
-            version__block_size = latest_update->second.file_size / _block_size;
+            version__block_size =
+                latest_update->second.stripe_size / _block_size;
         }
         uint32_t segment_start = latest_update->second.stripe_offset;
         auto start_overlap = segments.lower_bound({segment_start, 0, 0});

@@ -14,7 +14,9 @@
 #include "filesys.grpc.pb.h"
 
 using filesys::CreateFileArgs;
+using filesys::DeleteFileArgs;
 using filesys::Filesys;
+using filesys::GetFileListArgs;
 using filesys::GetFileListReply;
 using filesys::GetUpdateLogArgs;
 using filesys::GetUpdateLogReply;
@@ -78,9 +80,13 @@ class FilesysImpl final : public Filesys::Service {
         std::string block_data_str = args->block_data();
         Bytes block_data = Bytes(block_data_str.begin(), block_data_str.end());
 
+        const std::string public_key_str = args->metadata().public_key();
+        Bytes public_key = Bytes(public_key_str.begin(), public_key_str.end());
+        Metadata metadata{.public_key = public_key,
+                          .file_size = args->metadata().file_size()};
         if (!_data_storage.WriteFile(file_name, args->stripe_offset(),
                                      args->num_stripes(), _server_idx, version,
-                                     block_data)) {
+                                     block_data, metadata)) {
             return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
                                 "Invalid version.");
         }
@@ -88,17 +94,19 @@ class FilesysImpl final : public Filesys::Service {
         return Status::OK;
     }
 
-    Status GetFileList(ServerContext* context, const google::protobuf::Empty* _,
+    Status GetFileList(ServerContext* context, const GetFileListArgs* args,
                        ServerWriter<GetFileListReply>* writer) override {
-        const auto file_list = _data_storage.GetFileList();
+        const auto file_list = _data_storage.GetFileList(args->file_name());
         for (const auto& file : file_list) {
             GetFileListReply reply;
             reply.set_file_name(file->FileName());
-            Bytes public_key_bytes = file->PublicKey();
-            std::string public_key_str =
-                std::string(public_key_bytes.begin(), public_key_bytes.end());
-            reply.set_public_key(public_key_str);
             reply.set_version(file->Version());
+            if (args->metadata()) {
+                Bytes public_key_bytes = file->PublicKey();
+                std::string public_key_str = std::string(
+                    public_key_bytes.begin(), public_key_bytes.end());
+                reply.mutable_metadata()->set_public_key(public_key_str);
+            }
             writer->Write(reply);
         }
         return Status::OK;
@@ -113,29 +121,20 @@ class FilesysImpl final : public Filesys::Service {
                      ServerWriter<HeartBeatReply>* writer) override {
         return Status::OK;
     }
+
+    Status DeleteFile(ServerContext* context,
+                      const DeleteFileArgs* args) override {
+        return Status::OK;
+    }
 };
 
 /* Entry point of the service. Start the service. */
-static void RunServer(const std::string& ip_address, uint16_t port,
-                      const Config& config, const fs::path& local_storage) {
-    std::string server_address{ip_address + ":" + std::to_string(port)};
-
-    uint32_t server_idx = config.servers.size();
-    for (uint32_t i = 0; i < config.servers.size(); i++) {
-        const std::string& address_port = config.servers[i];
-        const std::string address =
-            address_port.substr(0, address_port.find(":"));
-        if (address == ip_address) {
-            server_idx = i;
-        }
-    }
-
-    if (server_idx == config.servers.size()) {
-        throw std::runtime_error("Invalid server IP address");
-    }
-
+static void RunServer(const std::string& ip_address, uint32_t server_idx,
+                      uint16_t port, const Config& config,
+                      const fs::path& local_storage) {
     FilesysImpl service(config, local_storage, server_idx);
 
+    std::string server_address{ip_address + ":" + std::to_string(port)};
     ServerBuilder builder;
     builder.AddListeningPort(server_address, grpc::InsecureServerCredentials());
     builder.RegisterService(&service);
@@ -148,8 +147,11 @@ int main(int argc, char* argv[]) {
     /* Parse command line arguments. */
     CLI::App filesys;
 
-    std::string ip_address;
-    filesys.add_option("-a,--address", ip_address)->required();
+    std::string ip_address{"0.0.0.0"};
+    filesys.add_option("-a,--address", ip_address);
+
+    uint32_t server_idx;
+    filesys.add_option("-i,--index", server_idx)->required(); /* todo. */
 
     uint16_t port{8080}; /* Default value for the port to serve on. */
     filesys.add_option("-p,--port", port);
@@ -165,7 +167,7 @@ int main(int argc, char* argv[]) {
     /* Process configuration file. */
     const std::string config_file = filesys.get_config_ptr()->as<std::string>();
     Config config = ParseConfig(config_file);
-    RunServer(ip_address, port, config, local_storage);
+    RunServer(ip_address, server_idx, port, config, local_storage);
 
     return 0;
 }

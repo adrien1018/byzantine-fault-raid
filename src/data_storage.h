@@ -27,11 +27,12 @@ class DataStorage {
     bool CreateFile(const std::string& file_name, const Bytes& public_key);
     bool WriteFile(const std::string& file_name, uint32_t stripe_offset,
                    uint32_t num_stripe, uint32_t block_idx, uint32_t version,
-                   const Bytes& block_data);
+                   const Bytes& block_data, const Metadata& metadata);
     Bytes ReadFile(const std::string& file_name, uint32_t stripe_offset,
                    uint32_t num_stripe, uint32_t version);
     uint32_t GetLatestVersion(const std::string& file_name);
-    std::vector<std::shared_ptr<File>> GetFileList();
+    std::vector<std::shared_ptr<File>> GetFileList(
+        const std::string& file_name);
 };
 
 #endif

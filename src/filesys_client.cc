@@ -9,6 +9,7 @@
 
 using filesys::CreateFileArgs;
 using filesys::Filesys;
+using filesys::GetFileListArgs;
 using filesys::GetFileListReply;
 using filesys::GetUpdateLogArgs;
 using filesys::GetUpdateLogReply;
@@ -45,11 +46,11 @@ class FilesysClient {
 
     void GetFileList() {
         ClientContext context;
-        Empty empty;
+        GetFileListArgs args;
 
         for (auto& server : _servers) {
             std::unique_ptr<ClientReader<GetFileListReply>> reader(
-                server->GetFileList(&context, empty));
+                server->GetFileList(&context, args));
 
             GetFileListReply reply;
             while (reader->Read(&reply)) {
