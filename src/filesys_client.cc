@@ -1,76 +1,130 @@
-#include <grpcpp/grpcpp.h>
+/*
+ * FUSE wrapper around the Byzantine Fault Raid file system.
+ */
 
-#include <CLI/CLI.hpp>
-#include <iostream>
-
-#include "async_query.h"
+#include <fuse.h>
+#include "CLI11.hh"
 #include "config.h"
-#include "filesys.grpc.pb.h"
-#include "signature.h"
 
-using filesys::CreateFileArgs;
-using filesys::Filesys;
-using filesys::GetFileListArgs;
-using filesys::GetFileListReply;
-using filesys::GetUpdateLogArgs;
-using filesys::GetUpdateLogReply;
-using filesys::ReadBlocksArgs;
-using filesys::ReadBlocksReply;
-using filesys::WriteBlocksArgs;
-using google::protobuf::Empty;
-using grpc::Channel;
-using grpc::ClientContext;
-using grpc::ClientReader;
-using grpc::Status;
+#include "BFRFileSystem.h"
 
-class FilesysClient {
-    std::vector<std::unique_ptr<Filesys::Stub>> _servers;
-    Config _config;
+static BFRFileSystem bfrFs;
 
-   public:
-    explicit FilesysClient(const Config& config) : _config(config) {
-        for (const auto& address : _config.servers) {
-            std::shared_ptr<Channel> channel = grpc::CreateChannel(
-                address, grpc::InsecureChannelCredentials());
-            _servers.emplace_back(Filesys::NewStub(channel));
-        }
+static int
+bfr_unlink(const char *path)
+{
+    return bfrFs.unlink(path);
+}
+
+static int
+bfr_getattr(const char *path, struct stat *stbuf)
+{
+    memset(stbuf, 0, sizeof(struct stat));
+
+    if (strcmp(path, "/") == 0)
+    {
+        /* Root directory of our file system. */
+        const size_t numFiles = bfrFs.getFileList().size();
+        stbuf->st_mode = S_IFDIR | 0755;
+        stbuf->st_nlink = numFiles;
+        return 0;
     }
 
-    void GetFileList() {}
-
-    void ReadBlocks(const std::string& file_name, uint32_t stripe_offset,
-                    uint32_t num_stripes, uint32_t version) {
-        std::vector<Filesys::Stub*> query_servers(_servers.size());
-        for (size_t i = 0; i < _servers.size(); i++)
-            query_servers[i] = _servers[i].get();
-
-        ReadBlocksArgs args;
-        args.set_file_name(file_name);
-        args.set_stripe_offset(stripe_offset);
-        args.set_num_stripes(num_stripes);
-        args.set_version(version);
-
-        QueryServers<ReadBlocksReply>(
-            query_servers, args, &Filesys::Stub::PrepareAsyncReadBlocks, 0, 30s,
-            [&](const std::vector<AsyncResponse<ReadBlocksReply>>& responses,
-                const std::vector<uint8_t>& replied, size_t recent_idx,
-                size_t& minimum_success) {
-                // return true if done
-                return false;
-            });
+    const std::optional<Metadata> metadata = bfrFs.open(path);
+    if (metadata.has_value())
+    {
+        /* File exists in our file system. */
+        stbuf->st_mode = S_IFREG | 0744;
+        stbuf->st_nlink = 1;
+        stbuf->st_size = metadata.value().filesize;
+        return 0;
     }
+    else
+    {
+        /* File doesn't exist in our file system. */
+        return -ENOENT;
+    }
+}
+
+static int
+bfr_open(const char *path, struct file_fuse_info *info)
+{
+    if (info->flags & O_CREAT)
+    {
+        return bfrFs.create(path);
+    }
+
+    const std::optional<Metadata> metadata = bfrFs.open(path);
+    if (metadata.hasValue())
+    {
+        return 0;
+    }
+    else
+    {
+        return -ENOENT;
+    }
+}
+
+static int
+bfr_read(const char *path, char *buf, size_t size, off_t offset,
+         struct fuse_file_info *fi)
+{
+    uint32_t version;
+    const int bytesRead = bfrFs.read(path, buf, size, offset, version);
+    return bytesRead;
+}
+
+static int
+bfr_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset,
+            struct fuse_file_info *fi)
+{
+    if (strcmp(path, "/") != 0) {
+        /* We only recognize the root directory. */
+        return -ENOENT;
+    }
+
+    filler(buf, ".", NULL, 0);  /* Current directory. */
+    filler(buf, "..", NULL, 0); /* Parent directory. */
+
+    const std::vector<std::string> fileList = bfrFs.getFileList();
+    for (const std::string &filename : fileList)
+    {
+        filler(buf, filename, NULL, 0);
+    }
+
+    return 0;
+}
+
+static int bfr_write(const char *path, const char *buf, size_t size,
+                     off_t offset, struct fuse_file_info *info)
+{
+    return bfrFs.write(path, buf, size, offset);
+}
+
+static struct fuse_operations bfr_filesystem_operations = {
+    .unlink  = bfr_unlink,
+    .getattr = bfr_getattr,
+    .open    = bfr_open,
+    .read    = bfr_read,
+    .readdir = bfr_readdir,
+    .write   = bfr_write,
 };
 
-int main(int argc, char* argv[]) {
-    CLI::App filesys;
-    filesys.set_config("--config", "../config.toml")->required();
+int
+main(int argc, char **argv)
+{
+    CLI::App app;
+    app.set_config("--config", "../config.toml")->required();
 
     CLI11_PARSE(filesys, argc, argv);
 
-    const std::string config_file = filesys.get_config_ptr()->as<std::string>();
-    Config config = ParseConfig(config_file);
+    const std::string configFile = app.get_config_ptr()->as<std::string>();
+    const Config config = ParseConfig(configFile);
 
-    FilesysClient client(config);
-    client.GetFileList();
-    client.ReadBlocks("temp", 0, 1, 1);
+    /* Initialize BFR-fs connection. */
+    bfrFs = new BFRFileSystem(config.servers, config.num_malicious,
+                              config.num_faulty, config.block_size);
+
+    return fuse_main(argc, argv, &bfr_filesystem_operations, NULL);
 }
+
