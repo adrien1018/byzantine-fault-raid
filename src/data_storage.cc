@@ -1,23 +1,40 @@
 #include "data_storage.h"
 
 #include <algorithm>
+#include <iostream>
 
 DataStorage::DataStorage(const fs::path& storage_directory, uint32_t block_size)
     : _storage_directory(storage_directory), _block_size(block_size) {
     /* If directory already existed then nothing happens. */
     fs::create_directory(_storage_directory);
+
+    /* Load the files already in the directory. */
+    for (const auto& entry : fs::directory_iterator(_storage_directory)) {
+        if (entry.is_regular_file()) {
+            std::string file_name = entry.path().filename();
+            _file_list.emplace(file_name, new File(_storage_directory,
+                                                   file_name, _block_size));
+        }
+    }
 }
 
 bool DataStorage::CreateFile(const std::string& file_name,
                              const Bytes& public_key) {
     std::lock_guard<std::mutex> lock(_mu);
-    if (_file_list.find(file_name) != _file_list.end()) {
+    if (auto handle = _file_list.find(file_name);
+        handle != _file_list.end() && !handle->second->Deleted()) {
         /* File already exists. */
         return false;
+    } else {
+        if (handle != _file_list.end()) {
+            handle->second->UpdateSignKey(public_key);
+        } else {
+            _file_list.emplace(
+                file_name, new File(_storage_directory, file_name, public_key,
+                                    _block_size));
+        }
     }
 
-    _file_list.emplace(file_name, new File(_storage_directory, file_name,
-                                           public_key, _block_size));
     return true;
 }
 
@@ -71,4 +88,15 @@ std::vector<std::shared_ptr<File>> DataStorage::GetFileList(
         file_list.emplace_back(_file_list[file_name]);
     }
     return file_list;
+}
+
+bool DataStorage::DeleteFile(const std::string& file_name) {
+    std::unique_lock<std::mutex> lock(_mu);
+    if (auto handle = _file_list.find(file_name); handle == _file_list.end()) {
+        return false;
+    } else {
+        lock.unlock();
+        handle->second->Delete();
+    }
+    return true;
 }

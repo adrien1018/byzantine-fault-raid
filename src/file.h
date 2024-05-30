@@ -28,8 +28,7 @@ struct UndoRecord {
                              block_size. */
     Bytes old_image;
     Clock::time_point time_to_live;
-    // Metadata metadata;
-    // bool deleted;
+    Metadata metadata;
 };
 
 class File {
@@ -41,23 +40,33 @@ class File {
     std::map<uint32_t, UndoRecord> _update_record;
     std::thread _garbage_collection;
     std::fstream _file_stream;
-    std::atomic<bool> _file_removed;
+    std::atomic<bool> _file_closed;
+    uint32_t _file_size;
+    bool _deleted;
+    uint32_t _base_position;
     const uint32_t _block_size;
 
     std::set<Segment> ReconstructVersion(uint32_t version);
     UndoRecord CreateUndoRecord(uint32_t stripe_offset, uint32_t num_stripes);
     void GarbageCollectRecord();
     uint32_t GetCurrentStripeSize();
+    void LoadUndoRecords(const std::string& log_directory);
+    UndoRecord LoadUndoRecord(const std::string& record_path);
 
    public:
     File(const std::string& directory, const std::string& file_name,
          const Bytes& public_key, uint32_t block_size);
+    File(const std::string& directory, const std::string& file_name,
+         uint32_t block_size);
     ~File();
     bool WriteStripes(uint32_t stripe_offset, uint32_t num_stripes,
                       uint32_t block_idx, uint32_t version,
                       const Bytes& block_data, const Metadata& metadata);
     Bytes ReadVersion(uint32_t version, uint32_t stripe_offset,
                       uint32_t num_stripes);
+    void Delete();
+    bool Deleted();
+    bool UpdateSignKey(const Bytes& public_key);
     uint32_t Version();
     std::string FileName() const;
     Bytes PublicKey() const;

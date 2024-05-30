@@ -6,6 +6,12 @@
 
 #include "encode_decode.h"
 
+/* A file is stored as
+    | version (4 bytes) | deleted (1 byte) | file_size (4 bytes)
+    | key size (4 bytes) | public key (variable size) | stripe size (4 bytes)
+    | block data (variable size)
+*/
+
 File::File(const std::string& directory, const std::string& file_name,
            const Bytes& public_key, uint32_t _block_size)
     : _directory(directory),
@@ -13,24 +19,101 @@ File::File(const std::string& directory, const std::string& file_name,
       _public_key(public_key, false),
       _version(0),
       _garbage_collection(&File::GarbageCollectRecord, this),
-      _file_removed(false),
+      _file_closed(false),
+      _file_size(0),
+      _deleted(false),
       _block_size(_block_size) {
     fs::path file_path = _directory / _file_name;
-    std::fstream::openmode open_mode =
-        std::fstream::binary | std::fstream::in | std::fstream::out;
-    if (!fs::exists(file_path)) {
-        open_mode |= std::fstream::trunc;
-    }
+    std::fstream::openmode open_mode = std::fstream::binary | std::fstream::in |
+                                       std::fstream::out | std::fstream::trunc;
+
     _file_stream.open(file_path, open_mode);
     if (_file_stream.fail()) {
         throw std::runtime_error("Failed to open fail");
     }
+
+    _file_stream.write((char*)&_version, sizeof(uint32_t));
+    _file_stream.write((char*)&_deleted, sizeof(bool));
+    _file_stream.write((char*)&_file_size, sizeof(uint32_t));
+    uint32_t public_key_size = public_key.size();
+    _file_stream.write((char*)&public_key_size, sizeof(uint32_t));
+    _file_stream.write((char*)public_key.data(), public_key_size);
+    uint32_t stripe_size = 0;
+    _file_stream.write((char*)&stripe_size, sizeof(uint32_t));
+    _base_position = _file_stream.tellp();
+
+    fs::path log_directory = _directory / fs::path(file_name + "_log");
+    fs::create_directory(log_directory);
+}
+
+File::File(const std::string& directory, const std::string& file_name,
+           uint32_t block_size)
+    : _directory(directory),
+      _file_name(file_name),
+      _garbage_collection(&File::GarbageCollectRecord, this),
+      _file_closed(false),
+      _file_size(0),
+      _deleted(false),
+      _block_size(block_size) {
+    fs::path file_path = _directory / _file_name;
+    std::fstream::openmode open_mode =
+        std::fstream::binary | std::fstream::in | std::fstream::out;
+    _file_stream.open(file_path, open_mode);
+
+    _file_stream.read((char*)&_version, sizeof(uint32_t));
+    _file_stream.read((char*)&_deleted, sizeof(bool));
+    _file_stream.read((char*)&_file_size, sizeof(uint32_t));
+    uint32_t public_key_size;
+    _file_stream.read((char*)&public_key_size, sizeof(uint32_t));
+    Bytes public_key(public_key_size);
+    _file_stream.read((char*)public_key.data(), public_key_size);
+    _public_key = SigningKey(public_key, false);
+    _base_position = _file_stream.tellg();
+
+    fs::path log_directory = _directory / fs::path(file_name + "_log");
+    LoadUndoRecords(log_directory);
 }
 
 File::~File() {
-    _file_removed.store(true);
+    _file_closed.store(true);
     _file_stream.close();
     _garbage_collection.join();
+}
+
+UndoRecord File::LoadUndoRecord(const std::string& record_path) {
+    UndoRecord record;
+
+    std::ifstream ifs;
+    ifs.open(record_path, std::fstream::binary);
+
+    ifs.read((char*)&record.version, sizeof(uint32_t));
+    ifs.read((char*)&record.stripe_offset, sizeof(uint32_t));
+    ifs.read((char*)&record.num_stripes, sizeof(uint32_t));
+    ifs.read((char*)&record.stripe_size, sizeof(uint32_t));
+    uint32_t public_key_size = record.metadata.public_key.size();
+    ifs.read((char*)&public_key_size, sizeof(uint32_t));
+    record.metadata.public_key.resize(public_key_size);
+    ifs.read((char*)record.metadata.public_key.data(), public_key_size);
+    ifs.read((char*)record.metadata.file_size, sizeof(uint32_t));
+    uint32_t read_size;
+    ifs.read((char*)&read_size, sizeof(uint32_t));
+    record.old_image.resize(read_size);
+    ifs.read((char*)record.old_image.data(), read_size);
+
+    record.time_to_live = Clock::now() + std::chrono::seconds(30);
+
+    ifs.close();
+    return record;
+}
+
+void File::LoadUndoRecords(const std::string& log_directory) {
+    for (const auto& entry : fs::directory_iterator(log_directory)) {
+        if (entry.is_regular_file()) {
+            std::string file_name = entry.path().filename();
+            uint32_t version = std::stoul(file_name);
+            _update_record[version] = LoadUndoRecord(entry.path());
+        }
+    }
 }
 
 bool File::WriteStripes(uint32_t stripe_offset, uint32_t num_stripes,
@@ -46,14 +129,18 @@ bool File::WriteStripes(uint32_t stripe_offset, uint32_t num_stripes,
     }
     std::lock_guard<std::mutex> lock(_mu);
 
-    if (version != _version + 1) {
+    if (version <= _version) {
+        /* Stale write. */
+        return true;
+    } else if (version != _version + 1) {
+        /* Version gap. */
         return false;
     }
 
     UndoRecord record = CreateUndoRecord(stripe_offset, num_stripes);
     _update_record[_version] = record;
 
-    _file_stream.seekp(stripe_offset * _block_size);
+    _file_stream.seekp(_base_position + stripe_offset * _block_size);
     _file_stream.write((char*)block_data.data(), block_data.size());
     _file_stream.flush();
     _version++;
@@ -79,7 +166,7 @@ Bytes File::ReadVersion(uint32_t version, uint32_t stripe_offset,
         uint32_t effective_start = std::max(start, stripe_offset);
         uint32_t effective_end = std::min(end, stripe_offset + num_stripes);
         if (version == _version) {
-            _file_stream.seekg(effective_start * _block_size);
+            _file_stream.seekg(_base_position + effective_start * _block_size);
             _file_stream.read(
                 (char*)block_data.data() +
                     (effective_start - stripe_offset) * _block_size,
@@ -99,6 +186,41 @@ Bytes File::ReadVersion(uint32_t version, uint32_t stripe_offset,
     return block_data;
 }
 
+void File::Delete() {
+    std::lock_guard<std::mutex> lock(_mu);
+    for (const auto& [version, record] : _update_record) {
+        fs::path undo_log =
+            _directory / (_file_name + "_version" + std::to_string(version));
+        fs::remove(undo_log);
+    }
+    _update_record.clear();
+    _file_stream.close();
+    fs::path file_path = _directory / _file_name;
+    fs::remove(file_path);
+
+    std::fstream::openmode open_mode =
+        std::fstream::binary | std::fstream::in | std::fstream::out;
+    _file_stream.open(file_path, open_mode);
+
+    _deleted = true;
+    _version++;
+}
+
+bool File::Deleted() {
+    std::lock_guard<std::mutex> lock(_mu);
+    return _deleted;
+}
+
+bool File::UpdateSignKey(const Bytes& public_key) {
+    std::lock_guard<std::mutex> lock(_mu);
+    if (!_deleted) {
+        return false;
+    }
+    _deleted = false;
+    _public_key = SigningKey(public_key, false);
+    return true;
+}
+
 uint32_t File::Version() {
     std::lock_guard<std::mutex> lock(_mu);
     return _version;
@@ -112,7 +234,7 @@ UndoRecord File::CreateUndoRecord(uint32_t stripe_offset,
                                   uint32_t num_stripes) {
     std::ofstream ofs;
     fs::path undo_log =
-        _directory / (_file_name + "_version" + std::to_string(_version));
+        _directory / fs::path(_file_name + "_log") / std::to_string(_version);
     ofs.open(undo_log, std::fstream::binary);
 
     if (ofs.fail()) {
@@ -120,20 +242,18 @@ UndoRecord File::CreateUndoRecord(uint32_t stripe_offset,
     }
 
     Bytes buffer;
-    _file_stream.seekg(0, std::ios::end);
-    std::streampos file_size = _file_stream.tellg();
+    uint32_t read_size;
+    uint32_t file_size = GetCurrentStripeSize();
     if (stripe_offset * _block_size < file_size) {
         uint32_t end = std::min(static_cast<uint32_t>(file_size),
                                 (stripe_offset + num_stripes) * _block_size);
-        uint32_t read_size = end - (stripe_offset * _block_size);
+        read_size = end - (stripe_offset * _block_size);
         if (read_size) {
-            _file_stream.seekg(stripe_offset * _block_size);
+            _file_stream.seekg(_base_position + stripe_offset * _block_size);
             buffer.resize(read_size);
             _file_stream.read((char*)buffer.data(), read_size);
-            ofs.write((char*)buffer.data(), read_size);
         }
     }
-    ofs.close();
 
     UndoRecord record{
         .version = _version,
@@ -142,21 +262,43 @@ UndoRecord File::CreateUndoRecord(uint32_t stripe_offset,
         .stripe_size = GetCurrentStripeSize(),
         .old_image = buffer,
         .time_to_live = Clock::now() + std::chrono::seconds(30),
+        .metadata =
+            Metadata{
+                .public_key = PublicKey(),
+                .file_size = _file_size,
+            },
     };
+
+    /* Persisting the record on disk. The format is:
+       |version (4 bytes)|stripe_offset (4 bytes)|num_stripes (4 bytes)
+       |stripe_size (4 bytes)|public_key_size(4bytes)|metadata_public_key
+       (variable bytes)|metadata_file_size (4 bytes)
+       |buffer_size(4 bytes)|block_data (variable size)| */
+    ofs.write((char*)&record.version, sizeof(uint32_t));
+    ofs.write((char*)&record.stripe_offset, sizeof(uint32_t));
+    ofs.write((char*)&record.num_stripes, sizeof(uint32_t));
+    ofs.write((char*)&record.stripe_size, sizeof(uint32_t));
+    uint32_t public_key_size = record.metadata.public_key.size();
+    ofs.write((char*)&public_key_size, sizeof(uint32_t));
+    ofs.write((char*)record.metadata.public_key.data(), public_key_size);
+    ofs.write((char*)record.metadata.file_size, sizeof(uint32_t));
+    ofs.write((char*)&read_size, sizeof(uint32_t));
+    ofs.write((char*)buffer.data(), read_size);
+    ofs.close();
 
     return record;
 }
 
 void File::GarbageCollectRecord() {
     std::unique_lock<std::mutex> lock(_mu, std::defer_lock);
-    while (!_file_removed.load()) {
+    while (!_file_closed.load()) {
         lock.lock();
         while (!_update_record.empty() &&
-               _update_record.begin()->second.time_to_live <= Clock::now()) {
+               _update_record.begin()->second.time_to_live <= Clock::now() &&
+               _update_record.begin()->second.version + 2 > _version) {
             fs::path undo_log =
-                _directory /
-                (_file_name + "_version" +
-                 std::to_string(_update_record.begin()->second.version));
+                _directory / fs::path(_file_name + "_log") /
+                std::to_string(_update_record.begin()->second.version);
             fs::remove(undo_log);
             _update_record.erase(_update_record.begin());
         }
@@ -168,8 +310,9 @@ void File::GarbageCollectRecord() {
 
 uint32_t File::GetCurrentStripeSize() {
     _file_stream.seekg(0, std::ios::end);
-    return _file_stream.tellg();
+    return static_cast<uint32_t>(_file_stream.tellg()) - _base_position;
 }
+
 std::set<Segment> File::ReconstructVersion(uint32_t version) {
     if (version > _version) {
         /* The version is higher than the current version. */
@@ -192,7 +335,7 @@ std::set<Segment> File::ReconstructVersion(uint32_t version) {
     while (latest_update != _update_record.rend() &&
            latest_update->second.version >= version) {
         /* This operation assumes that each update only keeps the file size
-         * the same or extends it, but never shrinks.*/
+         * the same or extends it, but never shrinks. */
         std::optional<std::set<Segment>::iterator> start_remover = std::nullopt;
         if (latest_update->second.version == version) {
             version__block_size =

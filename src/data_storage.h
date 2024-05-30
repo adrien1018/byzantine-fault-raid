@@ -18,9 +18,6 @@ class DataStorage {
     std::unordered_map<std::string, std::shared_ptr<File>> _file_list;
     const uint32_t _block_size;
 
-    void PersistLog();
-    void LoadStorageFromLog(); /* In case of recovery from crash, read the */
-
    public:
     explicit DataStorage(const fs::path& storage_directory,
                          uint32_t block_size);
@@ -33,6 +30,7 @@ class DataStorage {
     uint32_t GetLatestVersion(const std::string& file_name);
     std::vector<std::shared_ptr<File>> GetFileList(
         const std::string& file_name);
+    bool DeleteFile(const std::string& file_name);
 };
 
 #endif

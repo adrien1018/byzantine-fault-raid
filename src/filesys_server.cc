@@ -15,6 +15,7 @@
 
 using filesys::CreateFileArgs;
 using filesys::DeleteFileArgs;
+using filesys::FileInfo;
 using filesys::Filesys;
 using filesys::GetFileListArgs;
 using filesys::GetFileListReply;
@@ -99,19 +100,18 @@ class FilesysImpl final : public Filesys::Service {
     }
 
     Status GetFileList(ServerContext* context, const GetFileListArgs* args,
-                       ServerWriter<GetFileListReply>* writer) override {
+                       GetFileListReply* reply) override {
         const auto file_list = _data_storage.GetFileList(args->file_name());
         for (const auto& file : file_list) {
-            GetFileListReply reply;
-            reply.set_file_name(file->FileName());
-            reply.set_version(file->Version());
+            FileInfo* file_info = reply->add_files();
+            file_info->set_file_name(file->FileName());
+            file_info->set_version(file->Version());
             if (args->metadata()) {
                 Bytes public_key_bytes = file->PublicKey();
                 std::string public_key_str = std::string(
                     public_key_bytes.begin(), public_key_bytes.end());
-                reply.mutable_metadata()->set_public_key(public_key_str);
+                file_info->mutable_metadata()->set_public_key(public_key_str);
             }
-            writer->Write(reply);
         }
         return Status::OK;
     }

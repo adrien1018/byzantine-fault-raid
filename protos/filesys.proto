@@ -11,7 +11,7 @@ service Filesys {
 
   rpc WriteBlocks(WriteBlocksArgs) returns (google.protobuf.Empty) {}
 
-  rpc GetFileList(GetFileListArgs) returns (stream GetFileListReply) {}
+  rpc GetFileList(GetFileListArgs) returns (GetFileListReply) {}
 
   rpc GetUpdateLog(GetUpdateLogArgs) returns (stream GetUpdateLogReply) {}
 
@@ -54,12 +54,17 @@ message WriteBlocksArgs {
 message GetFileListArgs {
   optional bool metadata = 1;
   optional string file_name = 2;
+  optional bool include_delete = 3;
 }
 
-message GetFileListReply {
+message FileInfo {
   string file_name = 1;
   uint32 version = 2;
   optional Metadata metadata = 3;
+}
+
+message GetFileListReply {
+  repeated FileInfo files = 1;
 }
 
 message GetUpdateLogArgs {
