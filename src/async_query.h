@@ -1,6 +1,9 @@
 #pragma once
 
 #include <grpcpp/grpcpp.h>
+#include <chrono>
+
+using namespace std::chrono_literals;
 
 template <class T>
 struct AsyncResponse {
@@ -8,12 +11,30 @@ struct AsyncResponse {
   T reply;
 };
 
-template <class ResponseClass, class RequestClass, class Callback, class PrepareFunction, class Stub>
+/**
+ * Example usage:
+
+QueryServers<ReadBlocksReply>(
+    server_list, request, &Filesys::Stub::PrepareAsyncReadBlocks, minimum_success, 30s,
+    [&](const std::vector<AsyncResponse<ReadBlocksReply>>& responses,
+        const std::vector<uint8_t>& replied,
+        size_t recent_idx,
+        size_t& minimum_success) {
+      return false;
+    });
+
+  * The callback will only be called when number of success >= minimum_success
+  * Minimum_success can be modified in the callback
+  * Return true in the callback will skip all the remaining responses
+  * The whole function will return true only if callback returns true
+  */
+template <class ResponseClass, class RequestClass, class Callback, class PrepareFunction, class Stub, class Rep, class Period>
 bool QueryServers(
     const std::vector<Stub*>& servers,
     const RequestClass& request,
     PrepareFunction&& prepare,
     size_t minimum_success,
+    const std::chrono::duration<Rep, Period>& timeout,
     Callback&& callback) {
   grpc::ClientContext context;
   grpc::CompletionQueue cq;
