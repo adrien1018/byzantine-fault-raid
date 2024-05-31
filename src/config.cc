@@ -1,6 +1,6 @@
 #include "config.h"
 
-#include "toml.hh"
+#include <toml++/toml.hpp>
 
 Config ParseConfig(const std::string& config_file) {
     Config config;

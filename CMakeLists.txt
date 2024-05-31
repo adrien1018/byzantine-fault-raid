@@ -23,12 +23,20 @@ set(_PROTOBUF_PROTOC $<TARGET_FILE:protoc>)
 set(_GRPC_GRPCPP grpc++)
 set(_GRPC_CPP_PLUGIN_EXECUTABLE $<TARGET_FILE:grpc_cpp_plugin>)
 
-# spdlog
+# spdlog, CLI11 & toml++
 FetchContent_Declare(
   spdlog
   URL "https://github.com/gabime/spdlog/archive/refs/tags/v1.12.0.zip"
 )
-FetchContent_MakeAvailable_Exclude(spdlog)
+FetchContent_Declare(
+  cli11
+  URL "https://github.com/CLIUtils/CLI11/archive/refs/tags/v2.4.2.zip"
+)
+FetchContent_Declare(
+  tomlplusplus
+  URL "https://github.com/marzer/tomlplusplus/archive/refs/tags/v3.4.0.zip"
+)
+FetchContent_MakeAvailable_Exclude(spdlog cli11 tomlplusplus)
 
 find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
@@ -63,7 +71,7 @@ list(REMOVE_ITEM filesys_src "${CMAKE_SOURCE_DIR}/src/filesys_server.cc"
    "${CMAKE_SOURCE_DIR}/src/filesys_client.cc" "${CMAKE_SOURCE_DIR}/src/data_storage_test.cc")
 
 add_library(filesys_helper "${filesys_src}")
-target_link_libraries(filesys_helper crypto)
+target_link_libraries(filesys_helper crypto tomlplusplus::tomlplusplus)
 
 # filesys_grpc_proto
 set(GRPC_LIBRARIES ${_REFLECTION} ${_GRPC_GRPCPP} ${_PROTOBUF_LIBPROTOBUF})
@@ -75,7 +83,8 @@ add_library(filesys_grpc_proto
 target_link_libraries(filesys_grpc_proto ${GRPC_LIBRARIES})
 
 # Targets filesys_(client|server)
-set(COMMON_LIBRARIES filesys_grpc_proto filesys_helper spdlog::spdlog)
+set(COMMON_LIBRARIES filesys_grpc_proto filesys_helper spdlog::spdlog CLI11::CLI11 tomlplusplus::tomlplusplus)
+
 add_executable(filesys_server "${CMAKE_SOURCE_DIR}/src/filesys_server.cc")
 add_executable(filesys_client "${CMAKE_SOURCE_DIR}/src/filesys_client.cc")
 target_link_libraries(filesys_server ${COMMON_LIBRARIES})

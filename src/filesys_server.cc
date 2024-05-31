@@ -1,13 +1,13 @@
+#include <filesystem>
+#include <string>
+
+#include <CLI/CLI.hpp>
 #include <grpc/grpc.h>
 #include <grpcpp/security/server_credentials.h>
 #include <grpcpp/server.h>
 #include <grpcpp/server_builder.h>
 #include <grpcpp/server_context.h>
 
-#include <filesystem>
-#include <string>
-
-#include "CLI11.hh"
 #include "config.h"
 #include "data_storage.h"
 #include "file.h"
