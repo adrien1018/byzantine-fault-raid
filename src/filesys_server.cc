@@ -1,13 +1,17 @@
-#include <filesystem>
-#include <string>
-
-#include <CLI/CLI.hpp>
 #include <grpc/grpc.h>
+#include <grpcpp/grpcpp.h>
 #include <grpcpp/security/server_credentials.h>
 #include <grpcpp/server.h>
 #include <grpcpp/server_builder.h>
 #include <grpcpp/server_context.h>
 
+#include <CLI/CLI.hpp>
+#include <algorithm>
+#include <filesystem>
+#include <string>
+#include <unordered_map>
+
+#include "async_query.h"
 #include "config.h"
 #include "data_storage.h"
 #include "file.h"
@@ -21,10 +25,13 @@ using filesys::GetFileListArgs;
 using filesys::GetFileListReply;
 using filesys::GetUpdateLogArgs;
 using filesys::GetUpdateLogReply;
-using filesys::HeartBeatReply;
 using filesys::ReadBlocksArgs;
 using filesys::ReadBlocksReply;
 using filesys::WriteBlocksArgs;
+using grpc::Channel;
+using grpc::ClientAsyncResponseReader;
+using grpc::ClientContext;
+using grpc::CompletionQueue;
 using grpc::Server;
 using grpc::ServerBuilder;
 using grpc::ServerContext;
@@ -37,13 +44,26 @@ class FilesysImpl final : public Filesys::Service {
     Config _config;
     DataStorage _data_storage;
     uint32_t _server_idx;
+    std::vector<Filesys::Stub*> _peers;
 
    public:
     explicit FilesysImpl(const Config& config, const fs::path& local_storage,
                          uint32_t server_idx)
         : _config(config),
           _data_storage(local_storage, config.block_size),
-          _server_idx(server_idx) {}
+          _server_idx(server_idx) {
+        for (uint32_t i = 0; i < config.servers.size(); i++) {
+            if (i == server_idx) {
+                continue;
+            }
+            const auto address = config.servers[i];
+            std::shared_ptr<Channel> channel = grpc::CreateChannel(
+                address, grpc::InsecureChannelCredentials());
+            _peers.emplace_back(Filesys::NewStub(channel).release());
+        }
+
+        std::thread(&FilesysImpl::HeartBeat, this).detach();
+    }
 
     Status CreateFile(ServerContext* context, const CreateFileArgs* args,
                       google::protobuf::Empty* _) override {
@@ -103,6 +123,9 @@ class FilesysImpl final : public Filesys::Service {
                        GetFileListReply* reply) override {
         const auto file_list = _data_storage.GetFileList(args->file_name());
         for (const auto& file : file_list) {
+            if (!args->include_deleted() && file->Deleted()) {
+                continue;
+            }
             FileInfo* file_info = reply->add_files();
             file_info->set_file_name(file->FileName());
             file_info->set_version(file->Version());
@@ -121,15 +144,67 @@ class FilesysImpl final : public Filesys::Service {
         return Status::OK;
     }
 
-    Status HeartBeat(ServerContext* context, const google::protobuf::Empty* _,
-                     ServerWriter<HeartBeatReply>* writer) override {
-        return Status::OK;
-    }
-
     Status DeleteFile(ServerContext* context, const DeleteFileArgs* args,
                       google::protobuf::Empty* _) override {
         return Status::OK;
     }
+
+    void HeartBeat() {
+        while (true) {
+            GetFileListArgs args;
+            args.set_include_deleted(true);
+
+            QueryServers<GetFileListReply>(
+                _peers, args, &Filesys::Stub::PrepareAsyncGetFileList,
+                2 * _config.num_malicious + 1, 10s,
+                [&](const std::vector<AsyncResponse<GetFileListReply>>&
+                        responses,
+                    const std::vector<uint8_t>& replied, size_t _,
+                    size_t& minimum_success) -> bool {
+                    std::unordered_map<std::string, std::vector<uint32_t>>
+                        file_versions;
+                    for (uint32_t i = 0; i < replied.size(); i++) {
+                        if (replied[i] && responses[i].status.ok()) {
+                            const auto& files = responses[i].reply.files();
+                            for (int i = 0; i < files.size(); i++) {
+                                std::string file_name =
+                                    files.Get(i).file_name();
+                                uint32_t version = files.Get(i).version();
+                                file_versions[file_name].emplace_back(version);
+                            }
+                        }
+                    }
+
+                    for (auto& [file_name, versions] : file_versions) {
+                        std::sort(versions.begin(), versions.end());
+                        uint32_t offset =
+                            (2 * _config.num_malicious + 1 - versions.size());
+                        if (versions.size() > _config.num_malicious &&
+                            _data_storage.GetLatestVersion(file_name) <
+                                versions[_config.num_malicious - offset]) {
+                            std::thread(
+                                [&](const std::string& file_name,
+                                    uint32_t target_version) {
+                                    std::this_thread::sleep_for(
+                                        5s); /* Wait for possible write to come.
+                                              */
+                                    if (_data_storage.GetLatestVersion(
+                                            file_name) < target_version) {
+                                        Recovery(file_name);
+                                    }
+                                },
+                                file_name,
+                                versions[_config.num_malicious - offset])
+                                .detach();
+                        }
+                    }
+                    return true;
+                });
+            std::this_thread::sleep_for(10s);
+        }
+    }
+
+    void Recovery(const std::string& file_name) {}
 };
 
 /* Entry point of the service. Start the service. */

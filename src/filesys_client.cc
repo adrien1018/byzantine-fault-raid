@@ -1,12 +1,12 @@
-#include <iostream>
-
-#include <CLI/CLI.hpp>
 #include <grpcpp/grpcpp.h>
 
+#include <CLI/CLI.hpp>
+#include <iostream>
+
+#include "async_query.h"
 #include "config.h"
 #include "filesys.grpc.pb.h"
 #include "signature.h"
-#include "async_query.h"
 
 using filesys::CreateFileArgs;
 using filesys::Filesys;
@@ -14,7 +14,6 @@ using filesys::GetFileListArgs;
 using filesys::GetFileListReply;
 using filesys::GetUpdateLogArgs;
 using filesys::GetUpdateLogReply;
-using filesys::HeartBeatReply;
 using filesys::ReadBlocksArgs;
 using filesys::ReadBlocksReply;
 using filesys::WriteBlocksArgs;
@@ -37,33 +36,13 @@ class FilesysClient {
         }
     }
 
-    void GetFileList() {
-        ClientContext context;
-        GetFileListArgs args;
-
-        for (auto& server : _servers) {
-            std::unique_ptr<ClientReader<GetFileListReply>> reader(
-                server->GetFileList(&context, args));
-
-            GetFileListReply reply;
-            while (reader->Read(&reply)) {
-                std::cout << reply.file_name() << ' ' << reply.version()
-                          << '\n';
-            }
-
-            Status status = reader->Finish();
-            if (status.ok()) {
-                std::cout << "GetFileList successful\n";
-            } else {
-                std::cout << "GetFileList failed\n";
-            }
-        }
-    }
+    void GetFileList() {}
 
     void ReadBlocks(const std::string& file_name, uint32_t stripe_offset,
                     uint32_t num_stripes, uint32_t version) {
         std::vector<Filesys::Stub*> query_servers(_servers.size());
-        for (size_t i = 0; i < _servers.size(); i++) query_servers[i] = _servers[i].get();
+        for (size_t i = 0; i < _servers.size(); i++)
+            query_servers[i] = _servers[i].get();
 
         ReadBlocksArgs args;
         args.set_file_name(file_name);
@@ -73,12 +52,9 @@ class FilesysClient {
 
         QueryServers<ReadBlocksReply>(
             query_servers, args, &Filesys::Stub::PrepareAsyncReadBlocks, 0, 30s,
-            [&](
-                const std::vector<AsyncResponse<ReadBlocksReply>>& responses,
-                const std::vector<uint8_t>& replied,
-                size_t recent_idx,
-                size_t& minimum_success
-            ) {
+            [&](const std::vector<AsyncResponse<ReadBlocksReply>>& responses,
+                const std::vector<uint8_t>& replied, size_t recent_idx,
+                size_t& minimum_success) {
                 // return true if done
                 return false;
             });
