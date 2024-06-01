@@ -40,7 +40,12 @@ FetchContent_MakeAvailable_Exclude(spdlog cli11 tomlplusplus)
 
 find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
-pkg_search_module(FUSE REQUIRED fuse3)
+
+if (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
+    pkg_search_module(FUSE REQUIRED fuse)
+else()
+    pkg_search_module(FUSE REQUIRED fuse3)
+endif()
 
 # Proto file
 get_filename_component(filesys_proto "${PROJECT_SOURCE_DIR}/protos/filesys.proto" ABSOLUTE)
