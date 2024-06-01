@@ -79,30 +79,72 @@ std::unordered_set<std::string> BFRFileSystem::getFileList()
         = std::chrono::system_clock::now() + std::chrono::seconds(timeout_);
     context.set_deadline(deadline);
 
-    Empty empty;
+    GetFileListArgs args;
+    args.set_metadata(true);
+    args.include_deleted(false);
 
-    for (const auto &server : _servers)
+    CompletionQueue cq;
+
+    std::vector<AsyncResponse<GetFileListReply>> responseBuffer(numServers_);
+
+    for (size_t serverId = 0; serverId < numServers_; ++serverId)
     {
-        std::unique_ptr<ClientReader<GetFileListReply>>
-            reader((server->GetFileList(&context, empty));
+        std::unique_ptr<ClientAsyncResponseReader<GetFileListReply>> responseHeader
+            = servers_[serverId]->PrepareAsyncGetFileList(&context, args, &cq);
+        responseHeader->StartCall();
+        responseHeader->Finish(&responseBuffer[serverId].reply,
+                               &responseBuffer[serverId].status,
+                               (void *) serverId);
+    }
 
-        GetFileListReply reply;
-        while (reader->Read(&reply)) {
-            std::string filename = reply.file_name();
-            uint32 version = reply.version();
-            filenameCount[filename] += 1;
-            // TODO: A malicious server could return the same filename more than once
+    void *tag;
+    bool ok = false;
+    int successCount = 0;
+    while (cq.Next(&tag, &ok))
+    {
+        const size_t serverId = (size_t) tag;
+        AsyncResponse<GetFileListReply> *reply
+            = static_cast<AsyncResponse<GetFileListReply>*>(responseBuffer[serverId]);
+        if (reply->status.ok())
+        {
+            /*
+             * Keep track of the unique filenames returned by a server because
+             * a malicious server could return the same filename more than
+             * once.
+             */
+            std::unordered_set<std::string> uniqueFilenames;
+
+            for (const FileInfo &fileInfo : reply->reply().files)
+            {
+                std::string filename = fileInfo.file_name;
+                returnedFilenames.insert(filename);
+            }
+
+            for (const std::string &filename : uniqueFilenames)
+            {
+                ++filenameCounts[filename];
+            }
+
+            logger->info("Get file list from server {} success", serverId);
+
+            ++successCount;
+            if (successCount >= numServers_ - numFaulty_)
+            {
+                /* Sufficient servers responded with their file lists. */
+                cq.Shutdown();
+                break;
+            }
         }
-
-        const Status status = reader->Finish();
-        if (status.ok()) {
-            logger->Info("GetFileList success");
-        } else {
-            logger->Warning("GetFileList FAILED");
+        else
+        {
+            logger->warn("Get file list from server {} FAILED", serverId);
         }
     }
 
-    /* Only consider filenames reported by honest servers. */
+    /*
+     * Only consider filenames most common filenames
+     * (those reported by honest servers).
+     */
     std::unordered_set<std::string> fileList;
     for (const auto &[filename, count] : filenameCount)
     {
@@ -130,45 +172,48 @@ int BFRFileSystem::create(const char *path) const
 
     std::vector<AsyncResponse<Empty>> responseBuffer(numServers_);
 
-    for (int i = 0; i < numServers_; ++i)
+    for (int serverId = 0; serverId < numServers_; ++serverId)
     {
         std::unique_ptr<ClientAsyncResponseReader<Empty>> responseHeader
             = servers_[i]->PrepareAsyncCreateFile(&context, args, &cq);
         responseHeader->StartCall();
-        responseHeader->Finish(&responseBuffer[i].reply,
-                               &responseBuffer[i].status,
-                               (void *) &responseBuffer[i]);
+        responseHeader->Finish(&responseBuffer[serverId].reply,
+                               &responseBuffer[serverId].status,
+                               (void *) serverId);
     }
 
-    void *gotTag;
+    void *tag;
     bool ok = false;
     int successCount = 0;
     
-    while (cq.Next(&gotTag, &ok))
+    while (cq.Next(&tag, &ok))
     {
-        AsyncResponse<Empty> *reply = static_case<AsyncResponse<Empty> *>(gotTag);
+        const size_t serverId = (size_t) tag;
+        AsyncResponse<Empty> *reply
+            = static_cast<AsyncResponse<Empty>*>(responseBuffer[serverId]);
         if (reply->status.ok())
         {
             ++successCount;
-            logger->info("Create {} success", path);
+            logger->info("Create {} on server {} success", serverId, path);
 
             if (successCount >= numServers_ - numFaulty_ + numMalicious_)
             {
-                /* Sufficient servers successfully acknowledged. */
+                /* Sufficient servers successfully acknowledged create. */
                 cq.Shutdown();
                 return 0;
             }
         }
         else
         {
-            logger->warn("Create {} failed: {} {}",
+            logger->warn("Create {} on server {} FAILED ({}: {})",
                          path,
+                         serverId,
                          reply->status.error_code(),
                          reply->status.error_message());
         }
     }
 
-    return -EIO;
+    return -EEXIST;
 }
 
 std::optional<Metadata> BFRFileSystem::open(const char *path) const
@@ -181,29 +226,31 @@ std::optional<Metadata> BFRFileSystem::open(const char *path) const
     GetFileListArgs args;
     args.set_metadata(true);
     args.set_file_name(path);
+    args.set_include_deleted(false);
 
     CompletionQueue cq;
 
     std::vector<AsyncResponse<GetFileListReply>> responseBuffer(numServers_);
-    for (int i = 0; i < numServers_; ++i)
+    for (int serverId = 0; serverId < numServers_; ++serverId)
     {
         std::unique_ptr<ClientAsyncResponseReader<GetFileListReply>>
-            responseHeader = servers_[i]->PrepareAsyncGetFileList(&context, args, &cq);
+            responseHeader = servers_[serverId]->PrepareAsyncGetFileList(&context, args, &cq);
         responseHeader->StartCall();
-        responseHeader->Finish(&responseBuffer[i].reply,
-                               &responseBuffer[i].status,
-                               (void *) responseBuffer[i]);
+        responseHeader->Finish(&responseBuffer[serverId].reply,
+                               &responseBuffer[serverId].status,
+                               (void *) serverId);
     }
 
     std::unordered_set<Metadata, int> metadataCounts; // TODO: Metadata has to be hashable
 
-    void *gotTag;
+    void *tag;
     bool ok = false;
     // TODO: How many servers must respond to get majority?
-    while (cq.Next(&gotTag, &ok))
+    while (cq.Next(&tag, &ok))
     {
+        const size_t serverId = (size_t) tag;
         AsyncResponse<GetFileListReply> *reply
-            = static_cast<AsyncResponse<GetFileListReply>*>(gotTag);
+            = static_cast<AsyncResponse<GetFileListReply>*>(responseBuffer[serverId]);
         if (reply->status.ok())
         {
             const Metadata m = {
@@ -211,9 +258,9 @@ std::optional<Metadata> BFRFileSystem::open(const char *path) const
                 .filesize = reply->reply.get_filesize();
             };
             metadataCounts[m] += 1;
-            logger->Info("GetFileList success");
+            logger->info("Get {} metadata on server {} success", path, serverId);
         } else {
-            logger->Warning("GetFileList FAILED");
+            logger->warn("Get {} metadata on server {} FAILED", path, serverId);
         }
     }
 
@@ -325,7 +372,7 @@ int BFRFileSystem::read(const char *path, const char *buf, size_t size,
                 }
             }
 
-            logger->Info("Read blocks success");
+            logger->info("Read blocks success");
 
             ++successCount;
             if (successCount >= numServers_ - numFaulty_)
@@ -337,7 +384,7 @@ int BFRFileSystem::read(const char *path, const char *buf, size_t size,
         }
         else
         {
-            logger->Warning("Read blocks failed");
+            logger->warn("Read blocks failed");
         }
     }
 
@@ -461,7 +508,7 @@ int BFRFileSystem::write(const char *path, const char *buf, const size_t size,
         if (responseBuffer[i].status.ok())
         {
             ++successCount;
-            logger->Info("WriteBlocks success");
+            logger->info("WriteBlocks success");
             if (successCount >= numServers_ - numFaulty_ + numMalicious_)
             {
                 /* Sufficient servers successfully acknowledged. */
@@ -471,7 +518,7 @@ int BFRFileSystem::write(const char *path, const char *buf, const size_t size,
         }
         else
         {
-            logger->Warning("WriteBlocks FAILED");
+            logger->warn("WriteBlocks FAILED");
         }
     }
 
@@ -515,7 +562,7 @@ int BFRFileSystem::unlink(const char *path) const
         if (reply->status.ok())
         {
             ++successCount;
-            logger->Info("Delete {} success", path);
+            logger->info("Delete {} success", path);
             if (successCount >= numServers_ - numFaulty_ + numMalicious_)
             {
                 /* Sufficient servers successfully acknowledged. */
@@ -524,7 +571,7 @@ int BFRFileSystem::unlink(const char *path) const
         }
         else
         {
-            logger->Warning("Delete {} failed: {} {}",
+            logger->warn("Delete {} failed: {} {}",
                             path,
                             reply->status.error_status(),
                             reply->status.error_message());
