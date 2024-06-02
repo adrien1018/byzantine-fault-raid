@@ -40,6 +40,7 @@ class File {
     std::string _file_name;
     SigningKey _public_key;
     uint32_t _version;
+    uint32_t _first_image_version;
     std::map<uint32_t, UndoRecord> _update_record;
     std::thread _garbage_collection;
     std::fstream _file_stream;

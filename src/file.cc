@@ -61,6 +61,7 @@ File::File(const std::string& directory, const std::string& file_name,
       _file_name(file_name),
       _public_key(public_key, false),
       _version(0),
+      _first_image_version(0),
       _garbage_collection(&File::GarbageCollectRecord, this),
       _file_closed(false),
       _file_size(0),
@@ -92,6 +93,7 @@ File::File(const std::string& directory, const std::string& file_name,
            uint32_t block_size)
     : _directory(directory),
       _file_name(file_name),
+      _first_image_version(0),
       _garbage_collection(&File::GarbageCollectRecord, this),
       _file_closed(false),
       _file_size(0),
@@ -135,7 +137,11 @@ void File::LoadUndoRecords(const std::string& log_directory) {
         if (entry.is_regular_file()) {
             std::string file_name = entry.path().filename();
             uint32_t version = std::stoul(file_name);
-            _update_record[version] = LoadUndoRecord(entry.path());
+            UndoRecord record = LoadUndoRecord(entry.path());
+            if (record.old_image.empty()) {
+                _first_image_version = std::max(version + 1, _first_image_version);
+            }
+            _update_record[version] = std::move(record);
         }
     }
 }
@@ -299,14 +305,24 @@ void File::GarbageCollectRecord() {
     std::unique_lock<std::mutex> lock(_mu, std::defer_lock);
     while (!_file_closed.load()) {
         lock.lock();
-        while (!_update_record.empty() &&
-               _update_record.begin()->second.time_to_live <= Clock::now() &&
-               _update_record.begin()->second.version + 2 > _version) {
-            fs::path undo_log =
-                _directory / fs::path(_file_name + "_log") /
-                std::to_string(_update_record.begin()->second.version);
-            fs::remove(undo_log);
-            _update_record.erase(_update_record.begin());
+        for (uint32_t version = _first_image_version; version <= _version; 
+             version++) {
+            auto it = _update_record.find(version);
+            if (it == _update_record.end()) continue;
+            UndoRecord& record = it->second;
+            if (record.time_to_live > Clock::now() ||
+                record.version + 2 <= _version) {
+                continue;
+            }
+            // clear the old image and update undo log file
+            record.old_image.clear();
+            std::ofstream ofs;
+            ofs.open(UndoLogPath(version), std::fstream::binary);
+            if (ofs.fail()) {
+                throw std::runtime_error("Failed to create undo log.");
+            }
+            record.WriteToFile(ofs);
+            _first_image_version = std::max(version + 1, _first_image_version);
         }
         lock.unlock();
         std::this_thread::sleep_for(200ms);
@@ -324,8 +340,7 @@ std::set<Segment> File::ReconstructVersion(uint32_t version) {
         return {};
     }
     if (version != _version &&
-        (_update_record.empty() ||
-         _update_record.begin()->second.version > version)) {
+        (_update_record.empty() || _first_image_version > version)) {
         /* Not enough information to recover the old version. */
         return {};
     }
