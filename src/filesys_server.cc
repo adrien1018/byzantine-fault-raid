@@ -166,10 +166,9 @@ class FilesysImpl final : public Filesys::Service {
                     for (uint32_t i = 0; i < replied.size(); i++) {
                         if (replied[i] && responses[i].status.ok()) {
                             const auto& files = responses[i].reply.files();
-                            for (int i = 0; i < files.size(); i++) {
-                                std::string file_name =
-                                    files.Get(i).file_name();
-                                uint32_t version = files.Get(i).version();
+                            for (auto& file : files) {
+                                std::string file_name = file.file_name();
+                                uint32_t version = file.version();
                                 file_versions[file_name].emplace_back(version);
                             }
                         }
@@ -190,7 +189,7 @@ class FilesysImpl final : public Filesys::Service {
                                               */
                                     if (_data_storage.GetLatestVersion(
                                             file_name) < target_version) {
-                                        Recovery(file_name);
+                                        Recovery(file_name, target_version);
                                     }
                                 },
                                 file_name,
@@ -204,7 +203,9 @@ class FilesysImpl final : public Filesys::Service {
         }
     }
 
-    void Recovery(const std::string& file_name) {}
+    void Recovery(const std::string& file_name, int target_version) {
+        
+    }
 };
 
 /* Entry point of the service. Start the service. */

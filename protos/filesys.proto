@@ -13,7 +13,7 @@ service Filesys {
 
   rpc GetFileList(GetFileListArgs) returns (GetFileListReply) {}
 
-  rpc GetUpdateLog(GetUpdateLogArgs) returns (stream GetUpdateLogReply) {}
+  rpc GetUpdateLog(GetUpdateLogArgs) returns (GetUpdateLogReply) {}
 
   rpc DeleteFile(DeleteFileArgs) returns (google.protobuf.Empty) {}
 }
@@ -70,10 +70,14 @@ message GetUpdateLogArgs {
   uint32 after_version = 2;
 }
 
-message GetUpdateLogReply {
+message UpdateRecord {
   uint32 version = 1;
   uint32 stripe_offset = 2;
   uint32 num_stripes = 3;
+}
+
+message GetUpdateLogReply {
+  repeated UpdateRecord entries = 1;
 }
 
 message DeleteFileArgs {
