@@ -77,6 +77,8 @@ struct GFInt {
 };
 
 std::vector<GFInt> ComputeEncodeTable(uint8_t N) {
+  static std::vector<GFInt> cache[256];
+  if (cache[N].size()) return cache[N];
   std::vector<GFInt> x(N, GFInt(1));
   for (uint8_t i = 0; i < N; i++) {
     for (uint8_t j = 0; j < N; j++) {
@@ -84,6 +86,7 @@ std::vector<GFInt> ComputeEncodeTable(uint8_t N) {
       x[i] /= GFInt(i) - GFInt(j);
     }
   }
+  cache[N] = x;
   return x;
 }
 
@@ -130,6 +133,36 @@ std::vector<Bytes> RSEncode(uint8_t N, uint8_t D, size_t blocks, const uint8_t i
       for (size_t ni = 0, i = bi; ni < p; ni++, i++) {
         out[x][i] = ls[x-deg] * sum[ni];
       }
+    }
+  }
+  return out;
+}
+
+Bytes RSEncodeOneBlock(uint8_t N, uint8_t D, size_t blocks, const uint8_t in[], uint8_t block_id) {
+  uint8_t deg = N-D;
+  Bytes out(blocks);
+  if (block_id < deg) {
+    memcpy(out.data(), in + block_id * blocks, blocks);
+    return out;
+  }
+  auto table = ComputeEncodeTable(deg);
+  GFInt ls(1);
+  for (uint8_t j = 0; j < deg; j++) ls *= GFInt(block_id) - GFInt(j);
+  std::vector<GFInt> ins(deg);
+  std::vector<GFInt> table_x(deg);
+  constexpr size_t kBlock = 64;
+  for (uint8_t j = 0; j < deg; j++) table_x[j] = table[j] / (GFInt(block_id) - GFInt(j));
+  for (size_t bi = 0; bi < blocks; bi += kBlock) {
+    alignas(32) GFInt sum[kBlock], ins[kBlock];
+    memset(sum, 0, sizeof(sum));
+    size_t p = std::min(kBlock, blocks - bi);
+    for (uint8_t j = 0; j < deg; j++) {
+      memcpy(ins, in + j * blocks + bi, p);
+#pragma GCC unroll 8
+      for (size_t i = 0; i < kBlock; i++) sum[i] += table_x[j] * ins[i];
+    }
+    for (size_t ni = 0, i = bi; ni < p; ni++, i++) {
+      out[i] = ls * sum[ni];
     }
   }
   return out;

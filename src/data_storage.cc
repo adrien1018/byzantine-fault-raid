@@ -1,7 +1,6 @@
 #include "data_storage.h"
 
 #include <algorithm>
-#include <iostream>
 
 DataStorage::DataStorage(const fs::path& storage_directory, uint32_t block_size)
     : _storage_directory(storage_directory), _block_size(block_size) {
@@ -34,12 +33,11 @@ bool DataStorage::CreateFile(const std::string& file_name,
                                     _block_size));
         }
     }
-
     return true;
 }
 
 bool DataStorage::WriteFile(const std::string& file_name,
-                            uint32_t stripe_offset, uint32_t num_stripes,
+                            uint64_t stripe_offset, uint64_t num_stripes,
                             uint32_t block_idx, uint32_t version,
                             const Bytes& block_data, const Metadata& metadata) {
     std::unique_lock<std::mutex> lock(_mu);
@@ -54,7 +52,7 @@ bool DataStorage::WriteFile(const std::string& file_name,
 }
 
 Bytes DataStorage::ReadFile(const std::string& file_name,
-                            uint32_t stripe_offset, uint32_t num_stripes,
+                            uint64_t stripe_offset, uint64_t num_stripes,
                             uint32_t version) {
     std::unique_lock<std::mutex> lock(_mu);
     if (_file_list.find(file_name) == _file_list.end()) {
@@ -99,4 +97,13 @@ bool DataStorage::DeleteFile(const std::string& file_name) {
         handle->second->Delete();
     }
     return true;
+}
+
+std::shared_ptr<File> DataStorage::operator[](const std::string& file_name) {
+    std::lock_guard<std::mutex> lock(_mu);
+    auto it = _file_list.find(file_name);
+    if (it == _file_list.end()) {
+        return nullptr;
+    }
+    return it->second;
 }

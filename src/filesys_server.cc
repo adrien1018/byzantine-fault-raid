@@ -62,7 +62,7 @@ class FilesysImpl final : public Filesys::Service {
             _peers.emplace_back(Filesys::NewStub(channel).release());
         }
 
-        std::thread(&FilesysImpl::HeartBeat, this).detach();
+        // std::thread(&FilesysImpl::HeartBeat, this).detach();
     }
 
     Status CreateFile(ServerContext* context, const CreateFileArgs* args,
@@ -85,15 +85,17 @@ class FilesysImpl final : public Filesys::Service {
                                ? args->version()
                                : _data_storage.GetLatestVersion(file_name);
 
-        Bytes block_data = _data_storage.ReadFile(
-            file_name, args->stripe_offset(), args->num_stripes(), version);
-        if (block_data.empty()) {
-            return grpc::Status(grpc::StatusCode::NOT_FOUND,
-                                "Version does not exist or has expired.");
+        for (auto& range : args->stripe_ranges()) {
+            Bytes block_data = _data_storage.ReadFile(
+                file_name, range.offset(), range.count(), version);
+            if (block_data.empty()) {
+                return grpc::Status(grpc::StatusCode::NOT_FOUND,
+                                    "Version does not exist or has expired.");
+            }
+            std::string block_data_str =
+                std::string(block_data.begin(), block_data.end());
+            *reply->add_block_data() = block_data_str;
         }
-        std::string block_data_str =
-            std::string(block_data.begin(), block_data.end());
-        reply->set_block_data(block_data_str);
         reply->set_version(version);
         return Status::OK;
     }
@@ -109,8 +111,8 @@ class FilesysImpl final : public Filesys::Service {
         Bytes public_key = Bytes(public_key_str.begin(), public_key_str.end());
         Metadata metadata{.public_key = public_key,
                           .file_size = args->metadata().file_size()};
-        if (!_data_storage.WriteFile(file_name, args->stripe_offset(),
-                                     args->num_stripes(), _server_idx, version,
+        if (!_data_storage.WriteFile(file_name, args->stripe_range().offset(),
+                                     args->stripe_range().count(), _server_idx, version,
                                      block_data, metadata)) {
             return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
                                 "Invalid version.");
@@ -140,12 +142,15 @@ class FilesysImpl final : public Filesys::Service {
     }
 
     Status GetUpdateLog(ServerContext* context, const GetUpdateLogArgs* args,
-                        ServerWriter<GetUpdateLogReply>* writer) override {
+                        GetUpdateLogReply* reply) override {
         return Status::OK;
     }
 
     Status DeleteFile(ServerContext* context, const DeleteFileArgs* args,
                       google::protobuf::Empty* _) override {
+        if (!_data_storage.DeleteFile(args->file_name())) {
+            return grpc::Status(grpc::StatusCode::NOT_FOUND, "File not found.");
+        }
         return Status::OK;
     }
 
@@ -156,46 +161,38 @@ class FilesysImpl final : public Filesys::Service {
 
             QueryServers<GetFileListReply>(
                 _peers, args, &Filesys::Stub::PrepareAsyncGetFileList,
-                2 * _config.num_malicious + 1, 10s,
-                [&](const std::vector<AsyncResponse<GetFileListReply>>&
-                        responses,
-                    const std::vector<uint8_t>& replied, size_t _,
-                    size_t& minimum_success) -> bool {
+                2 * _config.num_malicious + 1, 1s, 10s,
+                [&](const std::vector<AsyncResponse<GetFileListReply>>& responses,
+                    const std::vector<uint8_t>& replied, size_t& minimum_success) -> bool {
                     std::unordered_map<std::string, std::vector<uint32_t>>
                         file_versions;
                     for (uint32_t i = 0; i < replied.size(); i++) {
                         if (replied[i] && responses[i].status.ok()) {
                             const auto& files = responses[i].reply.files();
-                            for (int i = 0; i < files.size(); i++) {
-                                std::string file_name =
-                                    files.Get(i).file_name();
-                                uint32_t version = files.Get(i).version();
+                            for (auto& file : files) {
+                                std::string file_name = file.file_name();
+                                uint32_t version = file.version();
                                 file_versions[file_name].emplace_back(version);
                             }
                         }
                     }
 
                     for (auto& [file_name, versions] : file_versions) {
+                        if (versions.size() <= _config.num_malicious) continue;
                         std::sort(versions.begin(), versions.end());
-                        uint32_t offset =
-                            (2 * _config.num_malicious + 1 - versions.size());
+                        uint32_t offset = versions.size() - _config.num_malicious - 1;
+                        uint32_t target_version = versions[offset];
                         if (versions.size() > _config.num_malicious &&
-                            _data_storage.GetLatestVersion(file_name) <
-                                versions[_config.num_malicious - offset]) {
+                            _data_storage.GetLatestVersion(file_name) < target_version) {
                             std::thread(
-                                [&](const std::string& file_name,
-                                    uint32_t target_version) {
-                                    std::this_thread::sleep_for(
-                                        5s); /* Wait for possible write to come.
-                                              */
-                                    if (_data_storage.GetLatestVersion(
-                                            file_name) < target_version) {
-                                        Recovery(file_name);
+                                [this,file_name,target_version]() {
+                                    // Wait for possible write to come.
+                                    std::this_thread::sleep_for(15s);
+                                    uint32_t current_version = _data_storage.GetLatestVersion(file_name);
+                                    if (current_version < target_version) {
+                                        Recovery(file_name, current_version, target_version);
                                     }
-                                },
-                                file_name,
-                                versions[_config.num_malicious - offset])
-                                .detach();
+                                }).detach();
                         }
                     }
                     return true;
@@ -204,7 +201,29 @@ class FilesysImpl final : public Filesys::Service {
         }
     }
 
-    void Recovery(const std::string& file_name) {}
+    void Recovery(const std::string& file_name, uint32_t current_version, uint32_t target_version) {
+        GetUpdateLogArgs args;
+        args.set_file_name(file_name);
+        args.set_after_version(current_version);
+        std::map<uint32_t, UndoRecord> update_log;
+        while (true) {
+            QueryServers<GetUpdateLogReply>(
+                _peers, args, &Filesys::Stub::PrepareAsyncGetUpdateLog,
+                2 * _config.num_malicious + 1, 1s, 5s,
+                [&](const std::vector<AsyncResponse<GetUpdateLogReply>>& responses,
+                    const std::vector<uint8_t>& replied, size_t& minimum_success) -> bool {
+                    // TODO: Finish after finalizing update log format
+                    // update target_version if needed
+                    return true;
+                });
+            // TODO: merge segments
+            // TODO: read file for each segment; continue if fail
+            break;
+        }
+        std::shared_ptr<File> file = _data_storage[file_name];
+        if (file == nullptr) throw std::runtime_error("File not found");
+        // file->UpdateUndoLogAndFile(update_log, segments);
+    }
 };
 
 /* Entry point of the service. Start the service. */
