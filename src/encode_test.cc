@@ -43,6 +43,11 @@ int main() {
     auto blocks = Encode(data, n, d, key, "name", 0, 0);
     auto end = steady_clock::now();
     double encode_time = duration<double>(end - start).count();
+  
+    for (int i = 0; i < n; i++) {
+      if (!VerifyBlock(blocks[i], i, key, "name", 0, 0)) throw;
+      if (EncodeOneBlock(data, n, d, i, key, "name", 0, 0) != blocks[i]) throw;
+    }
 
     start = steady_clock::now();
     auto ret = Decode(blocks, data.size(), n, d, key, "name", 0, 0);

@@ -14,6 +14,10 @@ std::vector<Bytes> Encode(const Bytes& raw_stripe, int n, int d,
                           const SigningKey& private_key,
                           const std::string& filename, size_t stripe_id,
                           int version);
+Bytes EncodeOneBlock(const Bytes& raw_stripe, int n, int d, int block_id,
+                     const SigningKey& private_key,
+                     const std::string& filename, size_t stripe_id,
+                     int version);
 
 // pass empty vector for missing blocks
 // raw_stripe_size is raw_stripe.size() passed to Encode()

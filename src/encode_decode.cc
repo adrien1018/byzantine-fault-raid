@@ -50,6 +50,35 @@ std::vector<Bytes> Encode(
   return blocks;
 }
 
+Bytes EncodeOneBlock(const Bytes& raw_stripe, int n, int d, int block_id,
+                     const SigningKey& private_key,
+                     const std::string& filename, size_t stripe_id,
+                     int version) {
+  if (n > 255) {
+    throw std::invalid_argument("n > 255 not implemented");
+  }
+  if (block_id >= n) {
+    throw std::invalid_argument("block_id out of range");
+  }
+  size_t stride = n - d;
+  if (raw_stripe.size() % stride != 0) {
+    throw std::length_error("stripe size must be multiples of n-d");
+  }
+  size_t block_size = raw_stripe.size() / stride;
+  Bytes metadata = GenerateMetadata(filename, stripe_id, version);
+
+  Bytes block = RSEncodeOneBlock(n, d, block_size, raw_stripe.data(), block_id);
+  block.resize(block_size + 1 + metadata.size());
+  // signed data: concat(block, block_id, metadata)
+  block[block_size] = block_id; // block_id \in [0,255)
+  memcpy(block.data() + block_size + 1, metadata.data(), metadata.size());
+  Bytes signature = private_key.Sign(block);
+  // remove metadata and append signature to block
+  block.resize(block_size + signature.size());
+  memcpy(block.data() + block_size, signature.data(), signature.size());
+  return block;
+}
+
 Bytes Decode(
     const std::vector<Bytes>& blocks, size_t raw_stripe_size, int n, int d, const SigningKey& public_key,
     const std::string& filename, size_t stripe_id, int version) {
