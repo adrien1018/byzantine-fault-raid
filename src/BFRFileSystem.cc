@@ -339,9 +339,10 @@ int BFRFileSystem::read(const char *path, char *buf, size_t size,
     const uint64_t numStripes = endStripeId - startStripeId;
 
     ReadBlocksArgs args;
+    filesys::StripeRange* range = args.add_stripe_ranges();
     args.set_file_name(path);
-    args.set_stripe_offset(startStripeId);
-    args.set_num_stripes(numStripes);
+    range->set_offset(startStripeId);
+    range->set_count(numStripes);
     args.set_version(metadata.value().version);
 
     CompletionQueue cq;
@@ -378,8 +379,8 @@ int BFRFileSystem::read(const char *path, char *buf, size_t size,
         if (reply->status.ok())
         {
             // concatenation of blocks
-            const Bytes blocks(reply->reply.block_data().begin(),
-                               reply->reply.block_data().end());
+            const Bytes blocks(reply->reply.block_data(0).begin(),
+                               reply->reply.block_data(0).end());
             if (blocks.size() == numStripes * blockSize_)
             {
                 for (size_t stripeOffset = 0; stripeOffset < numStripes; ++stripeOffset)
@@ -512,9 +513,10 @@ int BFRFileSystem::write(const char *path, const char *buf, const size_t size,
         m.set_file_size(newFilesize);
 
         WriteBlocksArgs args;
+        filesys::StripeRange* range = args.mutable_stripe_range();
         args.set_file_name(path);
-        args.set_stripe_offset(startStripeId);
-        args.set_num_stripes(numStripes);
+        range->set_offset(startStripeId);
+        range->set_count(numStripes);
         args.set_version(newVersion);
         Bytes concatenatedBlocks;
         for (auto && block : blocksToWrite[serverId])
