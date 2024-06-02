@@ -1,10 +1,9 @@
 /*
- * Byzantine Fault Raid file system client library
+ * Byzantine Fault-tolerant RAID-like file system client library
  */
 
 #pragma once
 
-#include <unordered_set>
 #include <string>
 #include <vector>
 #include <memory>
@@ -14,18 +13,37 @@
 
 using filesys::Filesys;
 
-typedef struct {
+typedef struct FileMetadata {
     uint32_t version;
     uint64_t fileSize;
-} Metadata;
+
+    /* For unordered_map. */
+    bool operator ==(const FileMetadata &other) const
+    {
+        return (this->version == other.version) &&
+               (this->fileSize == other.fileSize);
+    }
+
+} FileMetadata;
+
+/* How to hash FileMetadata for unordered_map. */
+template<> struct std::hash<FileMetadata>
+{
+    std::size_t operator()(const FileMetadata &m) const
+    {
+        return std::hash<uint32_t>()(m.version) ^
+               std::hash<uint64_t>()(m.fileSize);
+    }
+};
 
 class BFRFileSystem final {
 public:
     /*
      * Initializes connections to servers; loads signing key.
      */
-    BFRFileSystem(const std::unordered_set<std::string> &serverAddrs,
-                  const int numMalicious, const int numFaulty);
+    BFRFileSystem(const std::vector<std::string> &serverAddresses,
+                  const int numMalicious, const int numFaulty,
+                  const int blockSize);
 
     /*
      * Returns the list of files.
@@ -41,14 +59,14 @@ public:
     /*
      * Returns the file's metadata if sufficient servers agree.
      */
-    std::optional<Metadata> open(const char *path) const;
+    std::optional<FileMetadata> open(const char *path) const;
 
     /*
      * Reads a BFR file.
      * Returns the number of bytes read; -errno on failure.
      */
-    int read(const char *path, const char *buf, const size_t size,
-             const off_t offset, uint32_t &version) const;
+    int read(const char *path, char *buf, const size_t size,
+             const off_t offset) const;
 
     /*
      * Writes to a BFR file.
@@ -70,10 +88,9 @@ private:
     int numServers_;
     int numMalicious_;
     int numFaulty_;
+    int blockSize_;
     int stripeSize_;
     SigningKey signingKey_;
     int timeout_;
 };
-
-
 

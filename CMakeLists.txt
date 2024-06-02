@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.11)
 project(Filesys C CXX)
 
-SET(CMAKE_CXX_FLAGS "-g -O2 -Wall -std=c++17")
+SET(CMAKE_CXX_FLAGS "-g -O2 -Wall -std=c++17 -D_FILE_OFFSET_BITS=64 -DFUSE_USE_VERSION=26 -D_DARWIN_USE_64_BIT_INODE")
 
 list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 include(FetchContentExclude)
@@ -72,8 +72,7 @@ include_directories("${CMAKE_SOURCE_DIR}/include")
 include_directories(${FUSE_INCLUDE_DIRS})
 
 file(GLOB filesys_src CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/*.cc")
-list(REMOVE_ITEM filesys_src "${CMAKE_SOURCE_DIR}/src/filesys_server.cc"
-   "${CMAKE_SOURCE_DIR}/src/filesys_client.cc" "${CMAKE_SOURCE_DIR}/src/data_storage_test.cc")
+list(REMOVE_ITEM filesys_src "${CMAKE_SOURCE_DIR}/src/filesys_server.cc" "${CMAKE_SOURCE_DIR}/src/filesys_client.cc" "${CMAKE_SOURCE_DIR}/src/data_storage_test.cc" "${CMAKE_SOURCE_DIR}/src/BFRFileSystem.cc")
 
 add_library(filesys_helper "${filesys_src}")
 target_link_libraries(filesys_helper crypto tomlplusplus::tomlplusplus)
@@ -87,9 +86,13 @@ add_library(filesys_grpc_proto
   ${filesys_proto_hdrs})
 target_link_libraries(filesys_grpc_proto ${GRPC_LIBRARIES})
 
-# Targets filesys_(client|server)
 set(COMMON_LIBRARIES filesys_grpc_proto filesys_helper spdlog::spdlog CLI11::CLI11 tomlplusplus::tomlplusplus)
 
+# BFRFileSystem target
+add_executable(BFRFileSystem "${CMAKE_SOURCE_DIR}/src/BFRFileSystem.cc")
+target_link_libraries(BFRFileSystem ${COMMON_LIBRARIES})
+
+# Targets filesys_(client|server)
 add_executable(filesys_server "${CMAKE_SOURCE_DIR}/src/filesys_server.cc")
 add_executable(filesys_client "${CMAKE_SOURCE_DIR}/src/filesys_client.cc")
 target_link_libraries(filesys_server ${COMMON_LIBRARIES})
