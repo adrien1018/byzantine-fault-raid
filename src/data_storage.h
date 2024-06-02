@@ -31,6 +31,7 @@ class DataStorage {
     std::vector<std::shared_ptr<File>> GetFileList(
         const std::string& file_name);
     bool DeleteFile(const std::string& file_name);
+    std::shared_ptr<File> operator[](const std::string& file_name);
 };
 
 #endif

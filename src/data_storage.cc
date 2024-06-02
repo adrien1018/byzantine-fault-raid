@@ -98,3 +98,12 @@ bool DataStorage::DeleteFile(const std::string& file_name) {
     }
     return true;
 }
+
+std::shared_ptr<File> DataStorage::operator[](const std::string& file_name) {
+    std::lock_guard<std::mutex> lock(_mu);
+    auto it = _file_list.find(file_name);
+    if (it == _file_list.end()) {
+        return nullptr;
+    }
+    return it->second;
+}
