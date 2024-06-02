@@ -1,5 +1,6 @@
 #include "file.h"
 
+#include <iostream>
 #include <iterator>
 #include <optional>
 #include <utility>
@@ -40,6 +41,7 @@ File::File(const std::string& directory, const std::string& file_name,
     _file_stream.write((char*)public_key.data(), public_key_size);
     uint32_t stripe_size = 0;
     _file_stream.write((char*)&stripe_size, sizeof(uint32_t));
+    _file_stream.flush();
     _base_position = _file_stream.tellp();
 
     fs::path log_directory = _directory / fs::path(file_name + "_log");
@@ -281,7 +283,7 @@ UndoRecord File::CreateUndoRecord(uint32_t stripe_offset,
     uint32_t public_key_size = record.metadata.public_key.size();
     ofs.write((char*)&public_key_size, sizeof(uint32_t));
     ofs.write((char*)record.metadata.public_key.data(), public_key_size);
-    ofs.write((char*)record.metadata.file_size, sizeof(uint32_t));
+    ofs.write((char*)&record.metadata.file_size, sizeof(uint32_t));
     ofs.write((char*)&read_size, sizeof(uint32_t));
     ofs.write((char*)buffer.data(), read_size);
     ofs.close();

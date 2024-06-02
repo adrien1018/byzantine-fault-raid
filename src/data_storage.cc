@@ -1,7 +1,6 @@
 #include "data_storage.h"
 
 #include <algorithm>
-#include <iostream>
 
 DataStorage::DataStorage(const fs::path& storage_directory, uint32_t block_size)
     : _storage_directory(storage_directory), _block_size(block_size) {
@@ -34,7 +33,6 @@ bool DataStorage::CreateFile(const std::string& file_name,
                                     _block_size));
         }
     }
-
     return true;
 }
 

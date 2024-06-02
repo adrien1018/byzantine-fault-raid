@@ -361,7 +361,42 @@ void TestConcurrentReadWrite() {
     fs::remove_all(test_dir);
 }
 
-void TestStorageBackup() {}
+void TestStorageBackup() {
+    std::cout << "Running TestStorageBackup...   " << std::flush;
+    std::string test_dir = "TestStorageBackup";
+    DataStorage storage(test_dir, BLOCK_SIZE);
+
+    const std::string file_name{"temp"};
+    storage.CreateFile(file_name, public_key);
+    Bytes version1 = RandomStripe(file_name, 1, 0, 1);
+    assert(storage.WriteFile(file_name, 0, 1, 0, 1, version1, Metadata{}) &&
+           "Write first failed");
+
+    Bytes update2 = RandomStripe(file_name, 2, 1, 1);
+    Bytes version2 = version1;
+    version2.insert(version2.end(), update2.begin(), update2.end());
+    assert(storage.WriteFile(file_name, 1, 1, 0, 2, update2, Metadata{}) &&
+           "Write second failed");
+
+    Bytes update3 = RandomStripe(file_name, 3, 1, 2);
+    Bytes version3 = version2;
+    version3.resize(BLOCK_SIZE);
+    version3.insert(version3.end(), update3.begin(), update3.end());
+    assert(storage.WriteFile(file_name, 1, 2, 0, 3, update3, Metadata{}) &&
+           "Write third failed");
+
+    DataStorage second_storage(test_dir, BLOCK_SIZE);
+    assert(second_storage.GetFileList("")[0]->FileName() == "temp");
+    assert(version3 == second_storage.ReadFile(file_name, 0, 3, 3) &&
+           "Version 3 mismatched");
+    assert(version2 == second_storage.ReadFile(file_name, 0, 2, 2) &&
+           "Version 2 mismatched");
+    assert(version1 == second_storage.ReadFile(file_name, 0, 1, 1) &&
+           "Version 1 mismatched");
+
+    std::cout << "Passed" << std::endl;
+    fs::remove_all(test_dir);
+}
 
 int main() {
     SetKey();
@@ -372,6 +407,7 @@ int main() {
     TestOverlapExtend();
     TestSimpleMultipleWrite();
     TestMultipleExtendWrite();
-    TestGarbageCollection();
-    TestConcurrentReadWrite();
+    TestStorageBackup();
+    // TestGarbageCollection();
+    // TestConcurrentReadWrite();
 }

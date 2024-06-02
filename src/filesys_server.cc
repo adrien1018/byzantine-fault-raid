@@ -62,7 +62,7 @@ class FilesysImpl final : public Filesys::Service {
             _peers.emplace_back(Filesys::NewStub(channel).release());
         }
 
-        std::thread(&FilesysImpl::HeartBeat, this).detach();
+        // std::thread(&FilesysImpl::HeartBeat, this).detach();
     }
 
     Status CreateFile(ServerContext* context, const CreateFileArgs* args,
@@ -146,6 +146,9 @@ class FilesysImpl final : public Filesys::Service {
 
     Status DeleteFile(ServerContext* context, const DeleteFileArgs* args,
                       google::protobuf::Empty* _) override {
+        if (!_data_storage.DeleteFile(args->file_name())) {
+            return grpc::Status(grpc::StatusCode::NOT_FOUND, "File not found.");
+        }
         return Status::OK;
     }
 
