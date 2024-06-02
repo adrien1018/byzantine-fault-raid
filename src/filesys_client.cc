@@ -18,8 +18,12 @@ bfr_unlink(const char *path)
     return bfrFs->unlink(path);
 }
 
-static int
-bfr_getattr(const char *path, struct stat *stbuf)
+
+#if FUSE_USE_VERSION >= 30
+static int bfr_getattr(const char *path, struct stat *stbuf, struct fuse_file_info *fi)
+#else
+static int bfr_getattr(const char *path, struct stat *stbuf)
+#endif
 {
     memset(stbuf, 0, sizeof(struct stat));
 
@@ -75,14 +79,26 @@ bfr_read(const char *path, char *buf, size_t size, off_t offset,
     return bytesRead;
 }
 
-static int
-bfr_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset,
-            struct fuse_file_info *fi)
+#if FUSE_USE_VERSION >= 30
+static int bfr_readdir(const char *path, void *buf, fuse_fill_dir_t filler_arg,
+                       off_t offset, struct fuse_file_info *fi, enum fuse_readdir_flags flags)
+#else
+static int bfr_readdir(const char *path, void *buf, fuse_fill_dir_t filler_arg,
+                       off_t offset, struct fuse_file_info *fi)
+#endif
 {
     if (strcmp(path, "/") != 0) {
         /* We only recognize the root directory. */
         return -ENOENT;
     }
+
+    auto filler = [&filler_arg](void *buf, const char *name, const struct stat *stbuf, off_t off) {
+#if FUSE_USE_VERSION >= 30
+        return filler_arg(buf, name, stbuf, off, FUSE_FILL_DIR_PLUS);
+#else
+        return filler_arg(buf, name, stbuf, off);
+#endif
+    };
 
     filler(buf, ".", NULL, 0);  /* Current directory. */
     filler(buf, "..", NULL, 0); /* Parent directory. */
@@ -109,8 +125,8 @@ static void bfr_destroy(void *private_data)
 }
 
 static struct fuse_operations bfr_filesystem_operations = {
-    .unlink  = bfr_unlink,
     .getattr = bfr_getattr,
+    .unlink  = bfr_unlink,
     .open    = bfr_open,
     .read    = bfr_read,
     .write   = bfr_write,
