@@ -177,10 +177,10 @@ class FilesysImpl final : public Filesys::Service {
                     }
 
                     for (auto& [file_name, versions] : file_versions) {
+                        if (versions.size() <= _config.num_malicious) continue;
                         std::sort(versions.begin(), versions.end());
-                        uint32_t offset =
-                            (2 * _config.num_malicious + 1 - versions.size());
-                        uint32_t target_version = versions[_config.num_malicious - offset];
+                        uint32_t offset = versions.size() - _config.num_malicious - 1;
+                        uint32_t target_version = versions[offset];
                         if (versions.size() > _config.num_malicious &&
                             _data_storage.GetLatestVersion(file_name) < target_version) {
                             std::thread(
@@ -203,17 +203,26 @@ class FilesysImpl final : public Filesys::Service {
     void Recovery(const std::string& file_name, uint32_t current_version, uint32_t target_version) {
         GetUpdateLogArgs args;
         args.set_file_name(file_name);
-        args.set_after_version(target_version);
-        QueryServers<GetUpdateLogReply>(
-            _peers, args, &Filesys::Stub::PrepareAsyncGetUpdateLog,
-            2 * _config.num_malicious + 1, 10s,
-            [&](const std::vector<AsyncResponse<GetUpdateLogReply>>& responses,
-                const std::vector<uint8_t>& replied, size_t _,
-                size_t& minimum_success) -> bool {
-                // TODO: Finish after finalizing update log format
-                return true;
-            });
+        args.set_after_version(current_version);
+        std::map<uint32_t, UndoRecord> update_log;
+        while (true) {
+            QueryServers<GetUpdateLogReply>(
+                _peers, args, &Filesys::Stub::PrepareAsyncGetUpdateLog,
+                2 * _config.num_malicious + 1, 10s,
+                [&](const std::vector<AsyncResponse<GetUpdateLogReply>>& responses,
+                    const std::vector<uint8_t>& replied, size_t _,
+                    size_t& minimum_success) -> bool {
+                    // TODO: Finish after finalizing update log format
+                    // update target_version if needed
+                    return true;
+                });
+            // TODO: merge segments
+            // TODO: read file for each segment; continue if fail
+            break;
+        }
         std::shared_ptr<File> file = _data_storage[file_name];
+        if (file == nullptr) throw std::runtime_error("File not found");
+        // file->UpdateUndoLogAndFile(update_log, segments);
     }
 };
 
