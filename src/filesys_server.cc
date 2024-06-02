@@ -140,7 +140,7 @@ class FilesysImpl final : public Filesys::Service {
     }
 
     Status GetUpdateLog(ServerContext* context, const GetUpdateLogArgs* args,
-                        ServerWriter<GetUpdateLogReply>* writer) override {
+                        GetUpdateLogReply* reply) override {
         return Status::OK;
     }
 
@@ -160,8 +160,7 @@ class FilesysImpl final : public Filesys::Service {
             QueryServers<GetFileListReply>(
                 _peers, args, &Filesys::Stub::PrepareAsyncGetFileList,
                 2 * _config.num_malicious + 1, 10s,
-                [&](const std::vector<AsyncResponse<GetFileListReply>>&
-                        responses,
+                [&](const std::vector<AsyncResponse<GetFileListReply>>& responses,
                     const std::vector<uint8_t>& replied, size_t _,
                     size_t& minimum_success) -> bool {
                     std::unordered_map<std::string, std::vector<uint32_t>>
@@ -181,23 +180,18 @@ class FilesysImpl final : public Filesys::Service {
                         std::sort(versions.begin(), versions.end());
                         uint32_t offset =
                             (2 * _config.num_malicious + 1 - versions.size());
+                        uint32_t target_version = versions[_config.num_malicious - offset];
                         if (versions.size() > _config.num_malicious &&
-                            _data_storage.GetLatestVersion(file_name) <
-                                versions[_config.num_malicious - offset]) {
+                            _data_storage.GetLatestVersion(file_name) < target_version) {
                             std::thread(
-                                [&](const std::string& file_name,
-                                    uint32_t target_version) {
-                                    std::this_thread::sleep_for(
-                                        5s); /* Wait for possible write to come.
-                                              */
-                                    if (_data_storage.GetLatestVersion(
-                                            file_name) < target_version) {
-                                        Recovery(file_name, target_version);
+                                [this,file_name,target_version]() {
+                                    // Wait for possible write to come.
+                                    std::this_thread::sleep_for(15s);
+                                    uint32_t current_version = _data_storage.GetLatestVersion(file_name);
+                                    if (current_version < target_version) {
+                                        Recovery(file_name, current_version, target_version);
                                     }
-                                },
-                                file_name,
-                                versions[_config.num_malicious - offset])
-                                .detach();
+                                }).detach();
                         }
                     }
                     return true;
@@ -206,8 +200,20 @@ class FilesysImpl final : public Filesys::Service {
         }
     }
 
-    void Recovery(const std::string& file_name, int target_version) {
-        
+    void Recovery(const std::string& file_name, uint32_t current_version, uint32_t target_version) {
+        GetUpdateLogArgs args;
+        args.set_file_name(file_name);
+        args.set_after_version(target_version);
+        QueryServers<GetUpdateLogReply>(
+            _peers, args, &Filesys::Stub::PrepareAsyncGetUpdateLog,
+            2 * _config.num_malicious + 1, 10s,
+            [&](const std::vector<AsyncResponse<GetUpdateLogReply>>& responses,
+                const std::vector<uint8_t>& replied, size_t _,
+                size_t& minimum_success) -> bool {
+                // TODO: Finish after finalizing update log format
+                return true;
+            });
+        std::shared_ptr<File> file = _data_storage[file_name];
     }
 };
 
