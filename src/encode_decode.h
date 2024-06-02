@@ -5,7 +5,9 @@
 #include "signature.h"
 
 struct DecodeError : public std::runtime_error {
-    using std::runtime_error::runtime_error;
+  size_t remaining_blocks;
+  DecodeError(size_t remaining_blocks, const std::string& msg = "") :
+      std::runtime_error(msg), remaining_blocks(remaining_blocks) {}
 };
 
 std::vector<Bytes> Encode(const Bytes& raw_stripe, int n, int d,

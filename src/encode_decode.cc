@@ -83,7 +83,7 @@ Bytes Decode(
         num_correct++;
       }
     }
-    if (n - num_correct > d) throw DecodeError("Too many invalid blocks");
+    if (n - num_correct > d) throw DecodeError(n - num_correct - d, "Too many invalid blocks");
   }
 
   Bytes ret(raw_stripe_size);
