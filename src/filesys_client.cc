@@ -45,9 +45,10 @@ class FilesysClient {
             query_servers[i] = _servers[i].get();
 
         ReadBlocksArgs args;
+        filesys::StripeRange* range = args.add_stripe_ranges();
         args.set_file_name(file_name);
-        args.set_stripe_offset(stripe_offset);
-        args.set_num_stripes(num_stripes);
+        range->set_offset(stripe_offset);
+        range->set_count(num_stripes);
         args.set_version(version);
 
         QueryServers<ReadBlocksReply>(

@@ -85,15 +85,17 @@ class FilesysImpl final : public Filesys::Service {
                                ? args->version()
                                : _data_storage.GetLatestVersion(file_name);
 
-        Bytes block_data = _data_storage.ReadFile(
-            file_name, args->stripe_offset(), args->num_stripes(), version);
-        if (block_data.empty()) {
-            return grpc::Status(grpc::StatusCode::NOT_FOUND,
-                                "Version does not exist or has expired.");
+        for (auto& range : args->stripe_ranges()) {
+            Bytes block_data = _data_storage.ReadFile(
+                file_name, range.offset(), range.count(), version);
+            if (block_data.empty()) {
+                return grpc::Status(grpc::StatusCode::NOT_FOUND,
+                                    "Version does not exist or has expired.");
+            }
+            std::string block_data_str =
+                std::string(block_data.begin(), block_data.end());
+            *reply->add_block_data() = block_data_str;
         }
-        std::string block_data_str =
-            std::string(block_data.begin(), block_data.end());
-        reply->set_block_data(block_data_str);
         reply->set_version(version);
         return Status::OK;
     }
@@ -109,8 +111,8 @@ class FilesysImpl final : public Filesys::Service {
         Bytes public_key = Bytes(public_key_str.begin(), public_key_str.end());
         Metadata metadata{.public_key = public_key,
                           .file_size = args->metadata().file_size()};
-        if (!_data_storage.WriteFile(file_name, args->stripe_offset(),
-                                     args->num_stripes(), _server_idx, version,
+        if (!_data_storage.WriteFile(file_name, args->stripe_range().offset(),
+                                     args->stripe_range().count(), _server_idx, version,
                                      block_data, metadata)) {
             return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
                                 "Invalid version.");
