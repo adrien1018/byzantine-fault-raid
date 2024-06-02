@@ -52,10 +52,9 @@ class FilesysClient {
         args.set_version(version);
 
         QueryServers<ReadBlocksReply>(
-            query_servers, args, &Filesys::Stub::PrepareAsyncReadBlocks, 0, 30s,
+            query_servers, args, &Filesys::Stub::PrepareAsyncReadBlocks, 0, 250ms, 30s,
             [&](const std::vector<AsyncResponse<ReadBlocksReply>>& responses,
-                const std::vector<uint8_t>& replied, size_t recent_idx,
-                size_t& minimum_success) {
+                const std::vector<uint8_t>& replied, size_t& minimum_success) {
                 // return true if done
                 return false;
             });

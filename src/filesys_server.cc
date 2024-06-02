@@ -161,10 +161,9 @@ class FilesysImpl final : public Filesys::Service {
 
             QueryServers<GetFileListReply>(
                 _peers, args, &Filesys::Stub::PrepareAsyncGetFileList,
-                2 * _config.num_malicious + 1, 10s,
+                2 * _config.num_malicious + 1, 1s, 10s,
                 [&](const std::vector<AsyncResponse<GetFileListReply>>& responses,
-                    const std::vector<uint8_t>& replied, size_t _,
-                    size_t& minimum_success) -> bool {
+                    const std::vector<uint8_t>& replied, size_t& minimum_success) -> bool {
                     std::unordered_map<std::string, std::vector<uint32_t>>
                         file_versions;
                     for (uint32_t i = 0; i < replied.size(); i++) {
@@ -210,10 +209,9 @@ class FilesysImpl final : public Filesys::Service {
         while (true) {
             QueryServers<GetUpdateLogReply>(
                 _peers, args, &Filesys::Stub::PrepareAsyncGetUpdateLog,
-                2 * _config.num_malicious + 1, 10s,
+                2 * _config.num_malicious + 1, 1s, 5s,
                 [&](const std::vector<AsyncResponse<GetUpdateLogReply>>& responses,
-                    const std::vector<uint8_t>& replied, size_t _,
-                    size_t& minimum_success) -> bool {
+                    const std::vector<uint8_t>& replied, size_t& minimum_success) -> bool {
                     // TODO: Finish after finalizing update log format
                     // update target_version if needed
                     return true;

@@ -15,10 +15,9 @@ struct AsyncResponse {
  * Example usage:
 
 QueryServers<ReadBlocksReply>(
-    server_list, request, &Filesys::Stub::PrepareAsyncReadBlocks, minimum_success, 30s,
+    server_list, request, &Filesys::Stub::PrepareAsyncReadBlocks, minimum_success, 100ms, 30s,
     [&](const std::vector<AsyncResponse<ReadBlocksReply>>& responses,
         const std::vector<uint8_t>& replied,
-        size_t recent_idx,
         size_t& minimum_success) {
       return false;
     });
@@ -27,16 +26,20 @@ QueryServers<ReadBlocksReply>(
   * Minimum_success can be modified in the callback
   * Return true in the callback will skip all the remaining responses
   * The whole function will return true only if callback returns true
+  * additional_wait specifies the time to wait after getting minimum_success successful responses
   */
-template <class ResponseClass, class RequestClass, class Callback, class PrepareFunction, class Stub, class Rep, class Period>
+template <class ResponseClass, class RequestClass, class Callback, class PrepareFunction, class Stub, class Rep1, class Period1, class Rep2, class Period2>
 bool QueryServers(
     const std::vector<Stub*>& servers,
     const RequestClass& request,
     PrepareFunction&& prepare,
     size_t minimum_success,
-    const std::chrono::duration<Rep, Period>& timeout,
+    const std::chrono::duration<Rep1, Period1>& additional_wait,
+    const std::chrono::duration<Rep2, Period2>& timeout,
     Callback&& callback) {
   grpc::ClientContext context;
+  context.set_deadline(std::chrono::system_clock::now() + timeout);
+
   grpc::CompletionQueue cq;
   std::vector<AsyncResponse<ResponseClass>> response_buffer(servers.size());
   for (size_t i = 0; i < servers.size(); i++) {
@@ -57,8 +60,14 @@ bool QueryServers(
     replied[i] = true;
     if (response_buffer[i].status.ok()) num_success++;
     if (num_success >= minimum_success) {
+      auto deadline = std::chrono::system_clock::now() + additional_wait;
+      while (cq.AsyncNext(&idx, &ok, deadline) == grpc::CompletionQueue::GOT_EVENT) {
+        i = (size_t)idx;
+        replied[i] = true;
+        if (response_buffer[i].status.ok()) num_success++;
+      }
       // TODO: can we just return and ignore any ongoing requests without any cleanup?
-      if (callback(response_buffer, replied, i, minimum_success)) return true;
+      if (callback(response_buffer, replied, minimum_success)) return true;
     }
   }
   return false;
