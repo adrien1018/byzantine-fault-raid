@@ -38,8 +38,8 @@ class FilesysClient {
 
     void GetFileList() {}
 
-    void ReadBlocks(const std::string& file_name, uint32_t stripe_offset,
-                    uint32_t num_stripes, uint32_t version) {
+    void ReadBlocks(const std::string& file_name, uint64_t stripe_offset,
+                    uint64_t num_stripes, uint32_t version) {
         std::vector<Filesys::Stub*> query_servers(_servers.size());
         for (size_t i = 0; i < _servers.size(); i++)
             query_servers[i] = _servers[i].get();

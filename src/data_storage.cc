@@ -37,7 +37,7 @@ bool DataStorage::CreateFile(const std::string& file_name,
 }
 
 bool DataStorage::WriteFile(const std::string& file_name,
-                            uint32_t stripe_offset, uint32_t num_stripes,
+                            uint64_t stripe_offset, uint64_t num_stripes,
                             uint32_t block_idx, uint32_t version,
                             const Bytes& block_data, const Metadata& metadata) {
     std::unique_lock<std::mutex> lock(_mu);
@@ -52,7 +52,7 @@ bool DataStorage::WriteFile(const std::string& file_name,
 }
 
 Bytes DataStorage::ReadFile(const std::string& file_name,
-                            uint32_t stripe_offset, uint32_t num_stripes,
+                            uint64_t stripe_offset, uint64_t num_stripes,
                             uint32_t version) {
     std::unique_lock<std::mutex> lock(_mu);
     if (_file_list.find(file_name) == _file_list.end()) {
