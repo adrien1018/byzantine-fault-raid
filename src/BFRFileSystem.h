@@ -91,7 +91,7 @@ private:
     int blockSize_;
     int stripeSize_;
     SigningKey signingKey_;
-    std::chrono::seconds timeout_;
+    std::chrono::microseconds timeout_;
 
     std::vector<Filesys::Stub*> QueryServers_() const;
 };

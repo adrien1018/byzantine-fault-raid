@@ -69,7 +69,7 @@ BFRFileSystem::BFRFileSystem(const std::vector<std::string> &serverAddresses,
     blockSize_ = blockSize;
     stripeSize_ = (blockSize - sizeof(SigningKey::kSignatureSize)) * (numServers_ - numFaulty_);
     // TODO: Add option to read key from file
-    timeout_ = 10s; /* Seconds. */
+    timeout_ = 10s;
 }
 
 std::vector<Filesys::Stub*> BFRFileSystem::QueryServers_() const {
@@ -136,7 +136,7 @@ int BFRFileSystem::create(const char *path) const
 {
     ClientContext context;
     const std::chrono::system_clock::time_point deadline
-        = std::chrono::system_clock::now() + std::chrono::seconds(timeout_);
+        = std::chrono::system_clock::now() + timeout_;
     context.set_deadline(deadline);
 
     CreateFileArgs args;
@@ -195,7 +195,7 @@ std::optional<FileMetadata> BFRFileSystem::open(const char *path) const
 {
     ClientContext context;
     const std::chrono::system_clock::time_point deadline
-        = std::chrono::system_clock::now() + std::chrono::seconds(timeout_);
+        = std::chrono::system_clock::now() + timeout_;
     context.set_deadline(deadline);
 
     GetFileListArgs args;
@@ -295,7 +295,7 @@ int BFRFileSystem::read(const char *path, char *buf, size_t size,
 
     ClientContext context;
     const std::chrono::system_clock::time_point deadline
-        = std::chrono::system_clock::now() + std::chrono::seconds(timeout_);
+        = std::chrono::system_clock::now() + timeout_;
     context.set_deadline(deadline);
 
     const uint64_t startOffset = roundDown(offset, stripeSize_);
@@ -372,7 +372,7 @@ int BFRFileSystem::read(const char *path, char *buf, size_t size,
             return true;
         });
 
-    if (!ret) return -ETIMEDOUT;
+    if (!ret) return -EIO;
     return size;
 }
 
@@ -445,7 +445,7 @@ int BFRFileSystem::write(const char *path, const char *buf, const size_t size,
 
     ClientContext context;
     const std::chrono::system_clock::time_point deadline
-        = std::chrono::system_clock::now() + std::chrono::seconds(timeout_);
+        = std::chrono::system_clock::now() + timeout_;
     context.set_deadline(deadline);
 
     CompletionQueue cq;
@@ -515,7 +515,7 @@ int BFRFileSystem::unlink(const char *path) const
 {
     ClientContext context;
     const std::chrono::system_clock::time_point deadline
-        = std::chrono::system_clock::now() + std::chrono::seconds(timeout_);
+        = std::chrono::system_clock::now() + timeout_;
     context.set_deadline(deadline);
 
     DeleteFileArgs args;
