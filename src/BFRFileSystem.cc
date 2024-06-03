@@ -306,13 +306,14 @@ int64_t BFRFileSystem::read(const char *path, char *buf, size_t size,
     const uint64_t endStripeId = endOffset / stripeSize_;
 
     const uint64_t numStripes = endStripeId - startStripeId;
+    const uint32_t version = metadata.value().version;
 
     ReadBlocksArgs args;
     filesys::StripeRange* range = args.add_stripe_ranges();
     args.set_file_name(path);
     range->set_offset(startStripeId);
     range->set_count(numStripes);
-    args.set_version(metadata.value().version);
+    args.set_version(version);
 
     /*
      * Outer vector represents stripes.
@@ -335,7 +336,7 @@ int64_t BFRFileSystem::read(const char *path, char *buf, size_t size,
             {
                 if (!encodedBlocks[i].empty() || !replied[i] || !responses[i].status.ok()) continue; 
                 auto& reply = responses[i].reply;
-                if (reply.block_data_size() != numStripes * blockSize_) continue;
+                if (reply.block_data_size() != numStripes * blockSize_ || reply.version() != version) continue;
 
                 const Bytes blocks(reply.block_data(0).begin(),
                                    reply.block_data(0).end());
@@ -345,8 +346,7 @@ int64_t BFRFileSystem::read(const char *path, char *buf, size_t size,
                         = blocks.begin() + (stripeOffset * blockSize_);
                     const Bytes::const_iterator last
                         = blocks.begin() + ((stripeOffset + 1) + blockSize_);
-                    const Bytes block(first, last);
-                    encodedBlocks[stripeOffset][i] = block;
+                    encodedBlocks[stripeOffset][i] = Bytes(first, last);
                 }
                 num_success++;
             }
@@ -357,20 +357,20 @@ int64_t BFRFileSystem::read(const char *path, char *buf, size_t size,
                 {
                     const std::vector<Bytes> stripe = encodedBlocks[stripeOffset];
                     const uint64_t stripeId = startStripeId + stripeOffset;
-                    const Bytes decodedStripe = Decode(stripe, stripeSize_, numServers_,
-                                                    numFaulty_, signingKey_, path, stripeId,
-                                                    metadata.value().version);
-                    bytesRead.insert(std::end(bytesRead),
-                                     std::begin(decodedStripe),
-                                     std::end(decodedStripe)); 
+                    const Bytes decodedStripe =
+                        Decode(stripe, stripeSize_, numServers_, numFaulty_,
+                               signingKey_, path, stripeId, version);
+                    bytesRead.insert(bytesRead.end(), decodedStripe.begin(), decodedStripe.end());
                 }
-                std::copy(bytesRead.begin() + offsetDiff, bytesRead.end(), buf);
+                memcpy(buf, bytesRead.data() + offsetDiff, size);
             } catch (DecodeError& e) {
                 minimum_success = num_success + e.remaining_blocks;
                 return false;
             }
             return true;
         }, "Read");
+
+    // TODO (optional): retry if failed because version too old?
 
     if (!ret) return -EIO;
     return size;
