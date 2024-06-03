@@ -62,7 +62,7 @@ BFRFileSystem::BFRFileSystem(const std::vector<std::string> &serverAddresses,
     numMalicious_ = numMalicious;
     numFaulty_ = numFaulty;
     blockSize_ = blockSize;
-    stripeSize_ = (blockSize - sizeof(SigningKey::kSignatureSize)) *
+    stripeSize_ = (blockSize - SigningKey::kSignatureSize) *
                   (numServers_ - numFaulty_);
     // TODO: Add option to read key from file
     timeout_ = 10s;
