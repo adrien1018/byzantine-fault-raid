@@ -92,12 +92,11 @@ bool QueryServers(
     const std::chrono::duration<Rep2, Period2>& timeout,
     Callback&& callback,
     const std::string& log_tag = "") {
-  grpc::ClientContext context;
-  context.set_deadline(std::chrono::system_clock::now() + timeout);
-
   grpc::CompletionQueue cq;
   std::vector<AsyncResponse<ResponseClass>> response_buffer(servers.size());
   for (size_t i = 0; i < servers.size(); i++) {
+    grpc::ClientContext context;
+    context.set_deadline(std::chrono::system_clock::now() + timeout);
     std::unique_ptr<grpc::ClientAsyncResponseReader<ResponseClass>> response_header =
         (servers[i]->*prepare)(&context, request, &cq);
     response_header->StartCall();
@@ -121,12 +120,11 @@ bool QueryServers(
     const std::chrono::duration<Rep2, Period2>& timeout,
     Callback&& callback,
     const std::string& log_tag = "") {
-  grpc::ClientContext context;
-  context.set_deadline(std::chrono::system_clock::now() + timeout);
-
   grpc::CompletionQueue cq;
   std::vector<AsyncResponse<ResponseClass>> response_buffer(servers.size());
   for (size_t i = 0; i < servers.size(); i++) {
+    grpc::ClientContext context;
+    context.set_deadline(std::chrono::system_clock::now() + timeout);
     std::unique_ptr<grpc::ClientAsyncResponseReader<ResponseClass>> response_header =
         (servers[i]->*prepare)(&context, requests[i], &cq);
     response_header->StartCall();
