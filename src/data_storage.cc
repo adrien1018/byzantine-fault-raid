@@ -51,18 +51,20 @@ bool DataStorage::WriteFile(const std::string& file_name,
                               block_data, metadata);
 }
 
-Bytes DataStorage::ReadFile(const std::string& file_name,
-                            uint64_t stripe_offset, uint64_t num_stripes,
-                            uint32_t version) {
+bool DataStorage::ReadFile(const std::string& file_name, uint64_t stripe_offset,
+                           uint64_t num_stripes, uint32_t version,
+                           Bytes& buffer) {
     std::unique_lock<std::mutex> lock(_mu);
     if (_file_list.find(file_name) == _file_list.end()) {
-        return Bytes{};
+        return false;
     }
 
     auto file = _file_list[file_name];
     lock.unlock();
 
-    return file->ReadVersion(version, stripe_offset, num_stripes);
+    Bytes result = file->ReadVersion(version, stripe_offset, num_stripes);
+    buffer = result;
+    return true;
 }
 
 uint32_t DataStorage::GetLatestVersion(const std::string& file_name) {
