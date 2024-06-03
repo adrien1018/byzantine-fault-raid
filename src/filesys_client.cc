@@ -57,20 +57,14 @@ static int bfr_getattr(const char *path, struct stat *stbuf)
 static int
 bfr_open(const char *path, struct fuse_file_info *info)
 {
-    if (info->flags & O_CREAT)
-    {
-        return bfrFs->create(path);
-    }
-
     const std::optional<FileMetadata> metadata = bfrFs->open(path);
-    if (metadata.has_value())
-    {
+    if (metadata.has_value()) {
         return 0;
     }
-    else
-    {
-        return -ENOENT;
+    if (info->flags & O_CREAT) {
+        return bfrFs->create(path);
     }
+    return -ENOENT;
 }
 
 // FUSE API does not support 64-bit.
