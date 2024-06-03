@@ -1,6 +1,7 @@
 #pragma once
 
 #include <grpcpp/grpcpp.h>
+#include <spdlog/spdlog.h>
 #include <chrono>
 
 using namespace std::chrono_literals;
@@ -18,7 +19,8 @@ bool WaitResponses(
     std::vector<AsyncResponse<ResponseClass>>& response_buffer,
     size_t minimum_success,
     const std::chrono::duration<Rep1, Period1>& additional_wait,
-    Callback&& callback) {
+    Callback&& callback,
+    const std::string& log_tag) {
   void* idx;
   bool ok = false;
   std::vector<uint8_t> replied(N);
@@ -27,16 +29,38 @@ bool WaitResponses(
     size_t i = (size_t)idx;
     replied[i] = true;
     if (response_buffer[i].status.ok()) num_success++;
+    if (log_tag.size()) {
+      spdlog::info("{}: Got response from server {}, ok={}, num_success={}", log_tag, i, response_buffer[i].status.ok(), num_success);
+    }
     if (num_success >= minimum_success) {
       auto deadline = std::chrono::system_clock::now() + additional_wait;
       while (cq.AsyncNext(&idx, &ok, deadline) == grpc::CompletionQueue::GOT_EVENT) {
         i = (size_t)idx;
         replied[i] = true;
         if (response_buffer[i].status.ok()) num_success++;
+        if (log_tag.size()) {
+          spdlog::info("{}: Got response from server {}, ok={}, num_success={}", log_tag, i, response_buffer[i].status.ok(), num_success);
+        }
       }
-      // TODO: can we just return and ignore any ongoing requests without any cleanup?
-      if (callback(response_buffer, replied, minimum_success)) return true;
+      if (log_tag.size()) {
+        spdlog::info("{}: Calling callback at {} successes", log_tag, num_success);
+      }
+      if (callback(response_buffer, replied, minimum_success)) {
+        if (log_tag.size()) {
+          spdlog::info("{}: Successful callback", log_tag, num_success);
+        }
+        cq.Shutdown();
+        while (cq.Next(&idx, &ok));
+        return true;
+      } else {
+        if (log_tag.size()) {
+          spdlog::info("{}: Callback returned false, new minimum_success={}", log_tag, num_success);
+        }
+      }
     }
+  }
+  if (log_tag.size()) {
+    spdlog::info("{}: Successful callback", log_tag, num_success);
   }
   return false;
 }
@@ -66,7 +90,8 @@ bool QueryServers(
     size_t minimum_success,
     const std::chrono::duration<Rep1, Period1>& additional_wait,
     const std::chrono::duration<Rep2, Period2>& timeout,
-    Callback&& callback) {
+    Callback&& callback,
+    const std::string& log_tag = "") {
   grpc::ClientContext context;
   context.set_deadline(std::chrono::system_clock::now() + timeout);
 
@@ -82,18 +107,20 @@ bool QueryServers(
   }
 
   return WaitResponses<ResponseClass>(
-      servers.size(), cq, response_buffer, minimum_success, additional_wait,std::forward<Callback>(callback));
+      servers.size(), cq, response_buffer, minimum_success, additional_wait,
+      std::forward<Callback>(callback), log_tag);
 }
 
-template <class ResponseClass, class RequestGen, class Callback, class PrepareFunction, class Stub, class Rep1, class Period1, class Rep2, class Period2>
-bool QueryServersMultiple(
+template <class ResponseClass, class RequestClass, class Callback, class PrepareFunction, class Stub, class Rep1, class Period1, class Rep2, class Period2>
+bool QueryServers(
     const std::vector<Stub*>& servers,
-    RequestGen&& request_gen,
+    const std::vector<RequestClass>& requests,
     PrepareFunction&& prepare,
     size_t minimum_success,
     const std::chrono::duration<Rep1, Period1>& additional_wait,
     const std::chrono::duration<Rep2, Period2>& timeout,
-    Callback&& callback) {
+    Callback&& callback,
+    const std::string& log_tag = "") {
   grpc::ClientContext context;
   context.set_deadline(std::chrono::system_clock::now() + timeout);
 
@@ -101,7 +128,7 @@ bool QueryServersMultiple(
   std::vector<AsyncResponse<ResponseClass>> response_buffer(servers.size());
   for (size_t i = 0; i < servers.size(); i++) {
     std::unique_ptr<grpc::ClientAsyncResponseReader<ResponseClass>> response_header =
-        (servers[i]->*prepare)(&context, request_gen(i), &cq);
+        (servers[i]->*prepare)(&context, requests[i], &cq);
     response_header->StartCall();
     response_header->Finish(&response_buffer[i].reply,
                             &response_buffer[i].status,
@@ -109,5 +136,6 @@ bool QueryServersMultiple(
   }
 
   return WaitResponses<ResponseClass>(
-      servers.size(), cq, response_buffer, minimum_success, additional_wait,std::forward<Callback>(callback));
+      servers.size(), cq, response_buffer, minimum_success, additional_wait,
+      std::forward<Callback>(callback), log_tag);
 }

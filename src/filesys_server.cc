@@ -196,7 +196,7 @@ class FilesysImpl final : public Filesys::Service {
                         }
                     }
                     return true;
-                });
+                }, "GetFileList");
             std::this_thread::sleep_for(10s);
         }
     }
@@ -215,7 +215,7 @@ class FilesysImpl final : public Filesys::Service {
                     // TODO: Finish after finalizing update log format
                     // update target_version if needed
                     return true;
-                });
+                }, "GetUpdateLog");
             // TODO: merge segments
             // TODO: read file for each segment; continue if fail
             break;

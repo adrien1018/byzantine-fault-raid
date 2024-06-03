@@ -114,7 +114,7 @@ std::unordered_set<std::string> BFRFileSystem::getFileList() const
                 }
             }
             return true;
-        });
+        }, "GetFileList");
 
     /*
      * Only consider filenames most common filenames
@@ -370,7 +370,7 @@ int64_t BFRFileSystem::read(const char *path, char *buf, size_t size,
                 return false;
             }
             return true;
-        });
+        }, "Read");
 
     if (!ret) return -EIO;
     return size;
