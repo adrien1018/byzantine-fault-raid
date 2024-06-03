@@ -5,6 +5,7 @@
 #include "signature.h"
 #include "spdlog/spdlog.h"
 #include "filesys.grpc.pb.h"
+#include "async_query.h"
 
 using filesys::CreateFileArgs;
 using filesys::DeleteFileArgs;
@@ -22,12 +23,6 @@ using grpc::ClientContext;
 using grpc::CompletionQueue;
 using grpc::InsecureChannelCredentials;
 using grpc::Status;
-
-template <class T>
-struct AsyncResponse {
-    Status status;
-    T reply;
-};
 
 /*
  * Rounds down a number to the closest specified multiple.
@@ -74,78 +69,52 @@ BFRFileSystem::BFRFileSystem(const std::vector<std::string> &serverAddresses,
     blockSize_ = blockSize;
     stripeSize_ = (blockSize - sizeof(SigningKey::kSignatureSize)) * (numServers_ - numFaulty_);
     // TODO: Add option to read key from file
-    timeout_ = 10; /* Seconds. */
+    timeout_ = 10s; /* Seconds. */
+}
+
+std::vector<Filesys::Stub*> BFRFileSystem::QueryServers_() const {
+    std::vector<Filesys::Stub*> query_servers;
+    for (auto& i : servers_) query_servers.push_back(i.get());
+    return query_servers;
 }
 
 std::unordered_set<std::string> BFRFileSystem::getFileList() const
 {
     std::unordered_map<std::string, int> filenameCounts;
-
-    ClientContext context;
-    const std::chrono::system_clock::time_point deadline
-        = std::chrono::system_clock::now() + std::chrono::seconds(timeout_);
-    context.set_deadline(deadline);
-
     GetFileListArgs args;
     args.set_metadata(true);
     args.set_include_deleted(false);
 
-    CompletionQueue cq;
+    bool ret = QueryServers<GetFileListReply>(
+        QueryServers_(), args, &Filesys::Stub::PrepareAsyncGetFileList,
+        numServers_ - numFaulty_, 100ms, timeout_,
+        [&](const std::vector<AsyncResponse<GetFileListReply>>& responses,
+            const std::vector<uint8_t>& replied,
+            size_t& minimum_success) -> bool {
 
-    std::vector<AsyncResponse<GetFileListReply>> responseBuffer(numServers_);
+            for (size_t i = 0; i < responses.size(); ++i) {
+                if (!replied[i] || !responses[i].status.ok()) continue;
+                auto& reply = responses[i].reply;
+                /*
+                * Keep track of the unique filenames returned by a server because
+                * a malicious server could return the same filename more than
+                * once.
+                */
+                std::unordered_set<std::string> uniqueFilenames;
 
-    for (size_t serverId = 0; serverId < numServers_; ++serverId)
-    {
-        std::unique_ptr<ClientAsyncResponseReader<GetFileListReply>> responseHeader
-            = servers_[serverId]->PrepareAsyncGetFileList(&context, args, &cq);
-        responseHeader->StartCall();
-        responseHeader->Finish(&responseBuffer[serverId].reply,
-                               &responseBuffer[serverId].status,
-                               (void *) serverId);
-    }
+                for (const FileInfo &fileInfo : reply.files())
+                {
+                    std::string filename = fileInfo.file_name();
+                    uniqueFilenames.insert(filename);
+                }
 
-    void *tag;
-    bool ok = false;
-    int successCount = 0;
-    while (cq.Next(&tag, &ok))
-    {
-        const size_t serverId = (size_t) tag;
-        AsyncResponse<GetFileListReply> *reply = &responseBuffer[serverId];
-        if (reply->status.ok())
-        {
-            /*
-             * Keep track of the unique filenames returned by a server because
-             * a malicious server could return the same filename more than
-             * once.
-             */
-            std::unordered_set<std::string> uniqueFilenames;
-
-            for (const FileInfo &fileInfo : reply->reply.files())
-            {
-                std::string filename = fileInfo.file_name();
-                uniqueFilenames.insert(filename);
+                for (const std::string &filename : uniqueFilenames)
+                {
+                    ++filenameCounts[filename];
+                }
             }
-
-            for (const std::string &filename : uniqueFilenames)
-            {
-                ++filenameCounts[filename];
-            }
-
-            spdlog::info("Get file list from server {} success", serverId);
-
-            ++successCount;
-            if (successCount >= numServers_ - numFaulty_)
-            {
-                /* Sufficient servers responded with their file lists. */
-                cq.Shutdown();
-                break;
-            }
-        }
-        else
-        {
-            spdlog::warn("Get file list from server {} FAILED", serverId);
-        }
-    }
+            return true;
+        });
 
     /*
      * Only consider filenames most common filenames
@@ -345,44 +314,31 @@ int BFRFileSystem::read(const char *path, char *buf, size_t size,
     range->set_count(numStripes);
     args.set_version(metadata.value().version);
 
-    CompletionQueue cq;
-    std::vector<AsyncResponse<ReadBlocksReply>> responseBuffer(numServers_);
-
-    for (size_t serverId = 0; serverId < numServers_; ++serverId)
-    {
-        std::unique_ptr<ClientAsyncResponseReader<ReadBlocksReply>> responseHeader
-            = servers_[serverId]->PrepareAsyncReadBlocks(&context, args, &cq);
-        responseHeader->StartCall();
-        responseHeader->Finish(&responseBuffer[serverId].reply,
-                               &responseBuffer[serverId].status,
-                               (void *) serverId);
-    }
-
     /*
      * Outer vector represents stripes.
      * Inner vector represents the blocks within a stripe.
      * A single block is represented by a Bytes object.
      */
     std::vector<std::vector<Bytes>> encodedBlocks(
-        numStripes,
-        std::vector<Bytes>(numServers_, std::vector<uint8_t>(blockSize_, 0))
+        numStripes, std::vector<Bytes>(numServers_)
     );
 
-    void *tag;
-    bool ok = false;
-    int successCount = 0;
-
-    while (cq.Next(&tag, &ok))
-    {
-        const size_t serverId = (size_t) tag;
-        const AsyncResponse<ReadBlocksReply> *reply = &responseBuffer[serverId];
-        if (reply->status.ok())
-        {
-            // concatenation of blocks
-            const Bytes blocks(reply->reply.block_data(0).begin(),
-                               reply->reply.block_data(0).end());
-            if (blocks.size() == numStripes * blockSize_)
+    bool ret = QueryServers<ReadBlocksReply>(
+        QueryServers_(), args, &Filesys::Stub::PrepareAsyncReadBlocks,
+        numServers_ - numFaulty_, 100ms, timeout_,
+        [&](const std::vector<AsyncResponse<ReadBlocksReply>>& responses,
+            const std::vector<uint8_t>& replied,
+            size_t& minimum_success) -> bool {
+            
+            size_t num_success = 0;
+            for (size_t i = 0; i < responses.size(); ++i)
             {
+                if (!encodedBlocks[i].empty() || !replied[i] || !responses[i].status.ok()) continue; 
+                auto& reply = responses[i].reply;
+                if (reply.block_data_size() != numStripes * blockSize_) continue;
+
+                const Bytes blocks(reply.block_data(0).begin(),
+                                   reply.block_data(0).end());
                 for (size_t stripeOffset = 0; stripeOffset < numStripes; ++stripeOffset)
                 {
                     const Bytes::const_iterator first
@@ -390,42 +346,33 @@ int BFRFileSystem::read(const char *path, char *buf, size_t size,
                     const Bytes::const_iterator last
                         = blocks.begin() + ((stripeOffset + 1) + blockSize_);
                     const Bytes block(first, last);
-                    encodedBlocks[stripeOffset][serverId] = block;
+                    encodedBlocks[stripeOffset][i] = block;
                 }
+                num_success++;
             }
 
-            spdlog::info("Read blocks success");
-
-            ++successCount;
-            if (successCount >= numServers_ - numFaulty_)
-            {
-                /* Sufficient servers provided blocks. */
-                cq.Shutdown();
-                break;
+            try {
+                Bytes bytesRead;
+                for (size_t stripeOffset = 0; stripeOffset < numStripes; ++stripeOffset)
+                {
+                    const std::vector<Bytes> stripe = encodedBlocks[stripeOffset];
+                    const int stripeId = startStripeId + stripeOffset;
+                    const Bytes decodedStripe = Decode(stripe, stripeSize_, numServers_,
+                                                    numFaulty_, signingKey_, path, stripeId,
+                                                    metadata.value().version);
+                    bytesRead.insert(std::end(bytesRead),
+                                     std::begin(decodedStripe),
+                                     std::end(decodedStripe)); 
+                }
+                std::copy(bytesRead.begin() + offsetDiff, bytesRead.end(), buf);
+            } catch (DecodeError& e) {
+                minimum_success = num_success + e.remaining_blocks;
+                return false;
             }
-        }
-        else
-        {
-            spdlog::warn("Read blocks failed");
-        }
-    }
+            return true;
+        });
 
-    Bytes bytesRead;
-
-    for (size_t stripeOffset = 0; stripeOffset < numStripes; ++stripeOffset)
-    {
-        const std::vector<Bytes> stripe = encodedBlocks[stripeOffset];
-        const int stripeId = startStripeId + stripeOffset;
-        const Bytes decodedStripe = Decode(stripe, stripeSize_, numServers_,
-                                           numFaulty_, signingKey_, path, stripeId,
-                                           metadata.value().version);
-        bytesRead.insert(std::end(bytesRead),
-                         std::begin(decodedStripe),
-                         std::end(decodedStripe)); 
-    }
-
-    std::copy(bytesRead.begin() + offsetDiff, bytesRead.end(), buf);
-
+    if (!ret) return -ETIMEDOUT;
     return size;
 }
 
