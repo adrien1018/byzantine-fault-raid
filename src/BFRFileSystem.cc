@@ -269,6 +269,10 @@ int64_t BFRFileSystem::read(const char *path, char *buf, size_t size,
     const uint64_t numStripes = endStripeId - startStripeId;
     const uint32_t version = metadata.value().version;
 
+    if (!version) {
+        return 0;
+    }
+
     ReadBlocksArgs args;
     filesys::StripeRange *range = args.add_stripe_ranges();
     args.set_file_name(path);
@@ -368,7 +372,7 @@ int64_t BFRFileSystem::write(const char *path, const char *buf,
     /* Read the stripes. */
     const int64_t bytesRead =
         this->read(path, stripesBuf, stripesBufSize, startOffset);
-    if (bytesRead <= 0) {
+    if (bytesRead < 0) {
         return -EIO;
     }
 
@@ -390,7 +394,6 @@ int64_t BFRFileSystem::write(const char *path, const char *buf,
                                      : metadata.value().fileSize;
 
     for (uint64_t stripeOffset = 0; stripeOffset < numStripes; ++stripeOffset) {
-        std::cerr << "Encoding stripe " << stripeOffset << std::endl;
         /* Encode each stripe. */
         const size_t stripeId = startStripeId + stripeOffset;
         Bytes rawStripe(stripesBuf + (stripeOffset * stripeSize_),
@@ -414,14 +417,16 @@ int64_t BFRFileSystem::write(const char *path, const char *buf,
         const std::chrono::system_clock::time_point deadline =
             std::chrono::system_clock::now() + timeout_;
         context.set_deadline(deadline);
-        filesys::Metadata m;
-        const Bytes publicKey = signingKey_.PublicKey();
-        m.set_public_key(std::string(publicKey.begin(), publicKey.end()));
-        m.set_file_size(newFilesize);
-
         WriteBlocksArgs args;
+        filesys::Metadata *m = args.mutable_metadata();
+        const Bytes publicKey = signingKey_.PublicKey();
+        m->set_public_key(std::string(publicKey.begin(), publicKey.end()));
+        m->set_file_size(newFilesize);
+
         filesys::StripeRange *range = args.mutable_stripe_range();
         args.set_file_name(path);
+        std::cerr << "Writing " << startStripeId << ' ' << numStripes << ' '
+                  << newVersion << '\n';
         range->set_offset(startStripeId);
         range->set_count(numStripes);
         args.set_version(newVersion);
@@ -430,9 +435,9 @@ int64_t BFRFileSystem::write(const char *path, const char *buf,
             concatenatedBlocks.insert(concatenatedBlocks.end(), block.begin(),
                                       block.end());
         }
+        std::cerr << "size is " << concatenatedBlocks.size() << '\n';
         args.set_block_data(
             std::string(concatenatedBlocks.begin(), concatenatedBlocks.end()));
-        args.set_allocated_metadata(&m);
         std::cerr << "Preparing call" << std::endl;
         std::unique_ptr<ClientAsyncResponseReader<Empty>> responseHeader =
             servers_[serverId]->PrepareAsyncWriteBlocks(&context, args, &cq);

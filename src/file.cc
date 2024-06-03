@@ -139,7 +139,8 @@ void File::LoadUndoRecords(const std::string& log_directory) {
             uint32_t version = std::stoul(file_name);
             UndoRecord record = LoadUndoRecord(entry.path());
             if (record.old_image.empty()) {
-                _first_image_version = std::max(version + 1, _first_image_version);
+                _first_image_version =
+                    std::max(version + 1, _first_image_version);
             }
             _update_record[version] = std::move(record);
         }
@@ -149,11 +150,14 @@ void File::LoadUndoRecords(const std::string& log_directory) {
 bool File::WriteStripes(uint64_t stripe_offset, uint64_t num_stripes,
                         uint32_t block_idx, uint32_t version,
                         const Bytes& block_data, const Metadata& metadata) {
+    std::cerr << stripe_offset << ' ' << num_stripes << ' ' << block_idx << ' '
+              << version << ' ' << block_data.size() << '\n';
     for (uint64_t i = 0; i < num_stripes; i++) {
         const Bytes block = Bytes(block_data.begin() + i * _block_size,
                                   block_data.begin() + (i + 1) * _block_size);
         if (!VerifyBlock(block, block_idx, _public_key, _file_name,
                          stripe_offset + i, version)) {
+            std::cerr << "Failed to verify block" << std::endl;
             return false;
         }
     }
@@ -163,6 +167,7 @@ bool File::WriteStripes(uint64_t stripe_offset, uint64_t num_stripes,
         /* Stale write. */
         return true;
     } else if (version != _version + 1) {
+        std::cerr << "Version gap" << std::endl;
         /* Version gap. */
         return false;
     }
@@ -275,7 +280,8 @@ UndoRecord File::CreateUndoRecord(uint64_t stripe_offset,
     uint64_t read_size;
     uint64_t file_size = GetCurrentStripeSize();
     if (stripe_offset * _block_size < file_size) {
-        uint64_t end = std::min(file_size, (stripe_offset + num_stripes) * _block_size);
+        uint64_t end =
+            std::min(file_size, (stripe_offset + num_stripes) * _block_size);
         read_size = end - (stripe_offset * _block_size);
         if (read_size) {
             _file_stream.seekg(_base_position + stripe_offset * _block_size);
@@ -305,7 +311,7 @@ void File::GarbageCollectRecord() {
     std::unique_lock<std::mutex> lock(_mu, std::defer_lock);
     while (!_file_closed.load()) {
         lock.lock();
-        for (uint32_t version = _first_image_version; version <= _version; 
+        for (uint32_t version = _first_image_version; version <= _version;
              version++) {
             auto it = _update_record.find(version);
             if (it == _update_record.end()) continue;

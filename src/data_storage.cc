@@ -1,6 +1,7 @@
 #include "data_storage.h"
 
 #include <algorithm>
+#include <iostream>
 
 DataStorage::DataStorage(const fs::path& storage_directory, uint32_t block_size)
     : _storage_directory(storage_directory), _block_size(block_size) {
@@ -42,6 +43,7 @@ bool DataStorage::WriteFile(const std::string& file_name,
                             const Bytes& block_data, const Metadata& metadata) {
     std::unique_lock<std::mutex> lock(_mu);
     if (_file_list.find(file_name) == _file_list.end()) {
+        std::cerr << "File not found: " << file_name << std::endl;
         return false;
     }
 
