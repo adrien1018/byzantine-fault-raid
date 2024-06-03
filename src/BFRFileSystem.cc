@@ -106,7 +106,8 @@ std::unordered_set<std::string> BFRFileSystem::getFileList() const {
                 }
             }
             return true;
-        }, "GetFileList");
+        },
+        "GetFileList");
 
     /*
      * Only consider filenames most common filenames
@@ -273,12 +274,7 @@ int64_t BFRFileSystem::read(const char *path, char *buf, size_t size,
     args.set_file_name(path);
     range->set_offset(startStripeId);
     range->set_count(numStripes);
-<<<<<<< HEAD
     args.set_version(version);
-=======
-    args.set_version(metadata.value().version);
-    std::cerr << "Working with version " << metadata.value().version << '\n';
->>>>>>> 8b249c1 (Debug WIP)
 
     /*
      * Outer vector represents stripes.
@@ -295,29 +291,13 @@ int64_t BFRFileSystem::read(const char *path, char *buf, size_t size,
             const std::vector<uint8_t> &replied,
             size_t &minimum_success) -> bool {
             size_t num_success = 0;
-<<<<<<< HEAD
-            for (size_t i = 0; i < responses.size(); ++i)
-            {
-                if (!encodedBlocks[i].empty() || !replied[i] || !responses[i].status.ok()) continue; 
-                auto& reply = responses[i].reply;
-                if (reply.block_data_size() != numStripes * blockSize_ || reply.version() != version) continue;
-
-                const Bytes blocks(reply.block_data(0).begin(),
-                                   reply.block_data(0).end());
-                for (size_t stripeOffset = 0; stripeOffset < numStripes; ++stripeOffset)
-                {
-                    const Bytes::const_iterator first
-                        = blocks.begin() + (stripeOffset * blockSize_);
-                    const Bytes::const_iterator last
-                        = blocks.begin() + ((stripeOffset + 1) + blockSize_);
-                    encodedBlocks[stripeOffset][i] = Bytes(first, last);
-=======
             for (size_t i = 0; i < responses.size(); ++i) {
                 if (!encodedBlocks[i].empty() || !replied[i] ||
                     !responses[i].status.ok())
                     continue;
                 auto &reply = responses[i].reply;
-                if (reply.block_data_size() != numStripes * blockSize_)
+                if (reply.block_data_size() != numStripes * blockSize_ ||
+                    reply.version() != version)
                     continue;
 
                 const Bytes blocks(reply.block_data(0).begin(),
@@ -328,9 +308,7 @@ int64_t BFRFileSystem::read(const char *path, char *buf, size_t size,
                         blocks.begin() + (stripeOffset * blockSize_);
                     const Bytes::const_iterator last =
                         blocks.begin() + ((stripeOffset + 1) + blockSize_);
-                    const Bytes block(first, last);
-                    encodedBlocks[stripeOffset][i] = block;
->>>>>>> 8b249c1 (Debug WIP)
+                    encodedBlocks[stripeOffset][i] = Bytes(first, last);
                 }
                 num_success++;
             }
@@ -342,30 +320,20 @@ int64_t BFRFileSystem::read(const char *path, char *buf, size_t size,
                     const std::vector<Bytes> stripe =
                         encodedBlocks[stripeOffset];
                     const uint64_t stripeId = startStripeId + stripeOffset;
-<<<<<<< HEAD
                     const Bytes decodedStripe =
                         Decode(stripe, stripeSize_, numServers_, numFaulty_,
                                signingKey_, path, stripeId, version);
-                    bytesRead.insert(bytesRead.end(), decodedStripe.begin(), decodedStripe.end());
+                    bytesRead.insert(bytesRead.end(), decodedStripe.begin(),
+                                     decodedStripe.end());
                 }
                 memcpy(buf, bytesRead.data() + offsetDiff, size);
-            } catch (DecodeError& e) {
-=======
-                    const Bytes decodedStripe = Decode(
-                        stripe, stripeSize_, numServers_, numFaulty_,
-                        signingKey_, path, stripeId, metadata.value().version);
-                    bytesRead.insert(std::end(bytesRead),
-                                     std::begin(decodedStripe),
-                                     std::end(decodedStripe));
-                }
-                std::copy(bytesRead.begin() + offsetDiff, bytesRead.end(), buf);
             } catch (DecodeError &e) {
->>>>>>> 8b249c1 (Debug WIP)
                 minimum_success = num_success + e.remaining_blocks;
                 return false;
             }
             return true;
-        }, "Read");
+        },
+        "Read");
 
     // TODO (optional): retry if failed because version too old?
 
