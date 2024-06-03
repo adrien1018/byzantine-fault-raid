@@ -270,8 +270,8 @@ std::optional<FileMetadata> BFRFileSystem::open(const char *path) const
     }
 }
 
-int BFRFileSystem::read(const char *path, char *buf, size_t size,
-                        off_t offset) const
+int64_t BFRFileSystem::read(const char *path, char *buf, size_t size,
+                           off_t offset) const
 {
     const std::optional<FileMetadata> metadata = this->open(path);
     if (metadata.has_value())
@@ -356,7 +356,7 @@ int BFRFileSystem::read(const char *path, char *buf, size_t size,
                 for (size_t stripeOffset = 0; stripeOffset < numStripes; ++stripeOffset)
                 {
                     const std::vector<Bytes> stripe = encodedBlocks[stripeOffset];
-                    const int stripeId = startStripeId + stripeOffset;
+                    const uint64_t stripeId = startStripeId + stripeOffset;
                     const Bytes decodedStripe = Decode(stripe, stripeSize_, numServers_,
                                                     numFaulty_, signingKey_, path, stripeId,
                                                     metadata.value().version);
@@ -376,8 +376,8 @@ int BFRFileSystem::read(const char *path, char *buf, size_t size,
     return size;
 }
 
-int BFRFileSystem::write(const char *path, const char *buf, const size_t size,
-                         const off_t offset) const
+int64_t BFRFileSystem::write(const char *path, const char *buf, const size_t size,
+                             const off_t offset) const
 {
     /* Open file to get metadata. */
     const std::optional<FileMetadata> metadata = this->open(path);
@@ -404,7 +404,7 @@ int BFRFileSystem::write(const char *path, const char *buf, const size_t size,
     }
 
     /* Read the stripes. */
-    const int bytesRead = this->read(path, stripesBuf, stripesBufSize, startOffset);
+    const int64_t bytesRead = this->read(path, stripesBuf, stripesBufSize, startOffset);
     if (bytesRead <= 0)
     {
         return -EIO;
@@ -427,7 +427,7 @@ int BFRFileSystem::write(const char *path, const char *buf, const size_t size,
                                  offset + size :
                                  metadata.value().fileSize;
 
-    for (int stripeOffset = 0; stripeOffset < numStripes; ++stripeOffset)
+    for (uint64_t stripeOffset = 0; stripeOffset < numStripes; ++stripeOffset)
     {
         /* Encode each stripe. */
         const size_t stripeId = startStripeId + stripeOffset;
@@ -507,6 +507,9 @@ int BFRFileSystem::write(const char *path, const char *buf, const size_t size,
             spdlog::warn("WriteBlocks FAILED");
         }
     }
+
+    // TODO: record which servers failed and retry in the background
+    // the record should be in permanent storage so that we can recover
 
     return -1;
 }

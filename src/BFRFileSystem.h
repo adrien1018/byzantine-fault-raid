@@ -65,16 +65,16 @@ public:
      * Reads a BFR file.
      * Returns the number of bytes read; -errno on failure.
      */
-    int read(const char *path, char *buf, const size_t size,
-             const off_t offset) const;
+    int64_t read(const char *path, char *buf, const size_t size,
+                 const off_t offset) const;
 
     /*
      * Writes to a BFR file.
      * Only able to be called by the file's owner.
      * Returns the number of bytes written; or -errno on failure.
      */
-    int write(const char *path, const char *buf, const size_t size,
-              const off_t offset) const;
+    int64_t write(const char *path, const char *buf, const size_t size,
+                  const off_t offset) const;
 
     /*
      * Deletes a BFR file.

@@ -10,7 +10,9 @@
 #include "config.h"
 #include "BFRFileSystem.h"
 
-static BFRFileSystem *bfrFs;
+static_assert(sizeof(off_t) == 8, "off_t must be 64 bits");
+
+static std::unique_ptr<BFRFileSystem> bfrFs;
 
 static int
 bfr_unlink(const char *path)
@@ -71,12 +73,12 @@ bfr_open(const char *path, struct fuse_file_info *info)
     }
 }
 
+// FUSE API does not support 64-bit.
 static int
 bfr_read(const char *path, char *buf, size_t size, off_t offset,
          struct fuse_file_info *fi)
 {
-    const int bytesRead = bfrFs->read(path, buf, size, offset);
-    return bytesRead;
+    return std::min(bfrFs->read(path, buf, size, offset), (int64_t)std::numeric_limits<int>::max());
 }
 
 #if FUSE_USE_VERSION >= 30
@@ -115,13 +117,13 @@ static int bfr_readdir(const char *path, void *buf, fuse_fill_dir_t filler_arg,
 static int bfr_write(const char *path, const char *buf, size_t size,
                      off_t offset, struct fuse_file_info *info)
 {
-    return bfrFs->write(path, buf, size, offset);
+    return std::min(bfrFs->write(path, buf, size, offset), (int64_t)std::numeric_limits<int>::max());
 }
 
 static void bfr_destroy(void *private_data)
 {
     /* Called on filesystem exit. Clean up filesystem. */
-    delete bfrFs;
+    bfrFs.reset();
 }
 
 static struct fuse_operations bfr_filesystem_operations = {
@@ -150,8 +152,8 @@ main(int argc, char **argv)
 
 
     /* Initialize BFR-fs connection. */
-    bfrFs = new BFRFileSystem(config.servers, config.num_malicious,
-                          config.num_faulty, config.block_size);
+    bfrFs = std::make_unique<BFRFileSystem>(
+        config.servers, config.num_malicious, config.num_faulty, config.block_size);
 
     return fuse_main(argc, argv, &bfr_filesystem_operations, NULL);
 }
