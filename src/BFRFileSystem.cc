@@ -137,51 +137,23 @@ int BFRFileSystem::create(const char *path) const {
     const Bytes publicKey = signingKey_.PublicKey();
     args.set_public_key(std::string(publicKey.begin(), publicKey.end()));
 
-    CompletionQueue cq;
+    const bool createSuccess = QueryServers<Empty>(
+        QueryServers_(),
+        args,
+        &Filesys::Stub::PrepareAsyncCreateFile,
+        numServers_ - numFaulty_ + numMalicious_,
+        100ms,
+        timeout_,
+        [&](const std::vector<AsyncResponse<Empty>> &responses,
+            const std::vector<uint8_t> &replied,
+            size_t &minimum_success) -> bool
+        {
+            return true;
+        },
+        "Create"
+    );
 
-    std::vector<AsyncResponse<Empty>> responseBuffer(numServers_);
-    std::vector<ClientContext> contexts(numServers_);
-
-    for (size_t serverId = 0; serverId < numServers_; ++serverId) {
-        ClientContext &context = contexts[serverId];
-        const std::chrono::system_clock::time_point deadline =
-            std::chrono::system_clock::now() + timeout_;
-        context.set_deadline(deadline);
-        std::unique_ptr<ClientAsyncResponseReader<Empty>> responseHeader =
-            servers_[serverId]->PrepareAsyncCreateFile(&context, args, &cq);
-        responseHeader->StartCall();
-        responseHeader->Finish(&responseBuffer[serverId].reply,
-                               &responseBuffer[serverId].status,
-                               (void *)serverId);
-    }
-
-    void *tag;
-    bool ok = false;
-    int successCount = 0;
-
-    while (cq.Next(&tag, &ok)) {
-        successCount++;
-        const size_t serverId = (size_t)tag;
-        const AsyncResponse<Empty> *reply = &responseBuffer[serverId];
-        if (reply->status.ok()) {
-            spdlog::info("Create {} on server {} success", serverId, path);
-        } else {
-            spdlog::warn(
-                "Create {} on server {} FAILED ({}: {})", path, serverId,
-                static_cast<int>(
-                    reply->status.error_code()),  // fmt doesn't like enums
-                reply->status.error_message());
-        }
-
-        if (successCount >= numServers_ - numFaulty_ + numMalicious_) {
-            /* Sufficient servers successfully acknowledged create. */
-            cq.Shutdown();
-            while (cq.Next(&tag, &ok));
-            return 0;
-        }
-    }
-
-    return -EEXIST;
+    return createSuccess ? 0 : -EEXIST;
 }
 
 std::optional<FileMetadata> BFRFileSystem::open(const char *path) const {

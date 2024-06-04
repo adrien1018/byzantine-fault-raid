@@ -77,7 +77,7 @@ class FilesysImpl final : public Filesys::Service {
             return Status::OK;
         } else {
             return grpc::Status(grpc::StatusCode::ALREADY_EXISTS,
-                                "File already existed.");
+                                "File already exists");
         }
     }
 

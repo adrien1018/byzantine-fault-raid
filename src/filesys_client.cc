@@ -15,7 +15,11 @@ static_assert(sizeof(off_t) == 8, "off_t must be 64 bits");
 
 static std::unique_ptr<BFRFileSystem> bfrFs;
 
-static int bfr_unlink(const char *path) { return bfrFs->unlink(path); }
+static int bfr_unlink(const char *path) {
+    const char *bfrPath = path + 1;
+    spdlog::info("FUSE unlink: {}", bfrPath);
+    return bfrFs->unlink(bfrPath);
+}
 
 #if FUSE_USE_VERSION >= 30
 static int bfr_getattr(const char *path, struct stat *stbuf,
@@ -27,17 +31,20 @@ static int bfr_getattr(const char *path, struct stat *stbuf)
     memset(stbuf, 0, sizeof(struct stat));
 
     if (strcmp(path, "/") == 0) {
+        spdlog::info("FUSE getattr: {}", path);
         /* Root directory of our file system. */
         const size_t numFiles = bfrFs->getFileList().size();
-        stbuf->st_mode = S_IFDIR | 0755;
+        stbuf->st_mode = S_IFDIR | 0777;
         stbuf->st_nlink = numFiles;
         return 0;
     }
 
-    const std::optional<FileMetadata> metadata = bfrFs->open(path);
+    const char *bfrPath = path + 1; // Remove preceding '/'
+    spdlog::info("FUSE getattr: {}", bfrPath);
+    const std::optional<FileMetadata> metadata = bfrFs->open(bfrPath);
     if (metadata.has_value()) {
         /* File exists in our file system. */
-        stbuf->st_mode = S_IFREG | 0744;
+        stbuf->st_mode = S_IFREG | 0777;
         stbuf->st_nlink = 1;
         stbuf->st_size = metadata.value().fileSize;
         return 0;
@@ -48,12 +55,14 @@ static int bfr_getattr(const char *path, struct stat *stbuf)
 }
 
 static int bfr_open(const char *path, struct fuse_file_info *info) {
-    const std::optional<FileMetadata> metadata = bfrFs->open(path);
+    const char *bfrPath = path + 1; // Remove preceding '/'
+    spdlog::info("FUSE open: {}", bfrPath);
+    const std::optional<FileMetadata> metadata = bfrFs->open(bfrPath);
     if (metadata.has_value()) {
         return 0;
     }
     if (info->flags & O_CREAT) {
-        return bfrFs->create(path);
+        return bfrFs->create(bfrPath);
     }
     return -ENOENT;
 }
@@ -61,7 +70,9 @@ static int bfr_open(const char *path, struct fuse_file_info *info) {
 // FUSE API does not support 64-bit.
 static int bfr_read(const char *path, char *buf, size_t size, off_t offset,
                     struct fuse_file_info *fi) {
-    return std::min(bfrFs->read(path, buf, size, offset),
+    const char *bfrPath = path + 1;
+    spdlog::info("FUSE read: {}", bfrPath);
+    return std::min(bfrFs->read(bfrPath, buf, size, offset),
                     (int64_t)std::numeric_limits<int>::max());
 }
 
@@ -74,6 +85,7 @@ static int bfr_readdir(const char *path, void *buf, fuse_fill_dir_t filler_arg,
                        off_t offset, struct fuse_file_info *fi)
 #endif
 {
+    spdlog::info("FUSE readdir: {}", path);
     if (strcmp(path, "/") != 0) {
         /* We only recognize the root directory. */
         return -ENOENT;
@@ -101,7 +113,9 @@ static int bfr_readdir(const char *path, void *buf, fuse_fill_dir_t filler_arg,
 
 static int bfr_write(const char *path, const char *buf, size_t size,
                      off_t offset, struct fuse_file_info *info) {
-    return std::min(bfrFs->write(path, buf, size, offset),
+    const char *bfrPath = path + 1;
+    spdlog::info("FUSE write: {}", bfrPath);
+    return std::min(bfrFs->write(bfrPath, buf, size, offset),
                     (int64_t)std::numeric_limits<int>::max());
 }
 
@@ -110,14 +124,24 @@ static void bfr_destroy(void *private_data) {
     bfrFs.reset();
 }
 
+static int bfr_create(const char *path, mode_t mode,
+                       struct fuse_file_info *info)
+{
+    const char *bfrPath = path + 1; // Remove preceding '/'
+    spdlog::info("FUSE create: {}", bfrPath);
+    return bfrFs->create(bfrPath);
+}
+
 static struct fuse_operations bfr_filesystem_operations = {
     .getattr = bfr_getattr,
-    .unlink = bfr_unlink,
-    .open = bfr_open,
-    .read = bfr_read,
-    .write = bfr_write,
+    .unlink  = bfr_unlink,
+    .open    = bfr_open,
+    .read    = bfr_read,
+    .write   = bfr_write,
     .readdir = bfr_readdir,
-    .destroy = bfr_destroy};
+    .destroy = bfr_destroy,
+    .create  = bfr_create
+};
 
 int main(int argc, char **argv) {
     CLI::App app;
