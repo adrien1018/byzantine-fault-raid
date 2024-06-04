@@ -178,6 +178,9 @@ bool File::WriteStripes(uint64_t stripe_offset, uint64_t num_stripes,
     _file_stream.seekp(_base_position + stripe_offset * _block_size);
     _file_stream.write((char*)block_data.data(), block_data.size());
     _file_stream.flush();
+    std::cerr << "Written " << block_data.size() << " at "
+              << _base_position + stripe_offset * _block_size << '\n';
+    std::cerr << "File size " << _file_stream.tellp() << '\n';
     _version++;
     _file_size = metadata.file_size;
 
@@ -188,7 +191,15 @@ Bytes File::ReadVersion(uint32_t version, uint64_t stripe_offset,
                         uint64_t num_stripes) {
     std::lock_guard<std::mutex> lock(_mu);
 
+    std::cerr << "Read version " << version << ' ' << stripe_offset << ' '
+              << num_stripes << std::endl;
+
+    if (_deleted) {
+        return {};
+    }
     std::set<Segment> segments = ReconstructVersion(version);
+    std::cerr << "Segments done " << segments.size() << std::endl;
+    std::cerr << segments.size() << std::endl;
     if (segments.empty()) {
         return {};
     }
@@ -237,6 +248,7 @@ void File::Delete() {
     _file_stream.open(file_path, open_mode);
 
     _deleted = true;
+    _file_size = 0;
     _version++;
 }
 
@@ -337,35 +349,41 @@ void File::GarbageCollectRecord() {
 }
 
 uint64_t File::GetCurrentStripeSize() {
-    _file_stream.seekg(0, std::ios::end);
+    _file_stream.seekg(std::ios::end);
+    std::cerr << _file_stream.tellg() << ' ' << _base_position << '\n';
     return static_cast<uint64_t>(_file_stream.tellg()) - _base_position;
 }
 
 std::set<Segment> File::ReconstructVersion(uint32_t version) {
     if (version > _version) {
         /* The version is higher than the current version. */
+        std::cerr << "Return due to version\n";
         return {};
     }
     if (version != _version &&
         (_update_record.empty() || _first_image_version > version)) {
         /* Not enough information to recover the old version. */
+        std::cerr << "No info\n";
         return {};
     }
     auto latest_update = _update_record.rbegin();
-
+    std::cerr << "Getting stripe size\n";
     uint64_t file_size = GetCurrentStripeSize();
+    std::cerr << "Stripe size: " << file_size << '\n';
     if (file_size % _block_size) {
         throw std::runtime_error("File size not on block boundary");
     }
     std::set<Segment> segments{{0, file_size / _block_size, _version}};
-    uint64_t version__block_size = file_size / _block_size;
+    std::cerr << "Segment now contains " << file_size / _block_size << '\n';
+    std::cerr << "Update record size: " << _update_record.size() << '\n';
+    uint64_t version_block_size = file_size / _block_size;
     while (latest_update != _update_record.rend() &&
            latest_update->second.version >= version) {
         /* This operation assumes that each update only keeps the file size
          * the same or extends it, but never shrinks. */
         std::optional<std::set<Segment>::iterator> start_remover = std::nullopt;
         if (latest_update->second.version == version) {
-            version__block_size =
+            version_block_size =
                 latest_update->second.stripe_size / _block_size;
         }
         uint64_t segment_start = latest_update->second.stripe_offset;
@@ -401,22 +419,25 @@ std::set<Segment> File::ReconstructVersion(uint32_t version) {
                          latest_update->second.version);
         latest_update = std::next(latest_update);
     }
+    std::cerr << "Out of while loop\n";
 
-    auto unused_segment = segments.lower_bound({version__block_size, 0, 0});
+    auto unused_segment = segments.lower_bound({version_block_size, 0, 0});
     if (unused_segment != segments.begin()) {
         auto to_edit = std::prev(unused_segment);
         auto [prev_start, prev_end, prev_version] = *to_edit;
-        if (prev_end > version__block_size) {
-            if (prev_start != version__block_size) {
-                segments.emplace(prev_start, version__block_size, prev_version);
+        if (prev_end > version_block_size) {
+            if (prev_start != version_block_size) {
+                segments.emplace(prev_start, version_block_size, prev_version);
             }
             segments.erase(to_edit);
         }
     }
 
+    std::cerr << "Erasing unused\n";
     while (unused_segment != segments.end()) {
         unused_segment = segments.erase(unused_segment);
     }
+    std::cerr << "Done\n";
 
     return segments;
 }

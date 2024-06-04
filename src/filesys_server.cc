@@ -83,6 +83,7 @@ class FilesysImpl final : public Filesys::Service {
 
     Status ReadBlocks(ServerContext* context, const ReadBlocksArgs* args,
                       ReadBlocksReply* reply) override {
+        std::cerr << "ReadBlocks\n";
         std::string file_name = args->file_name();
         uint32_t version = args->has_version()
                                ? args->version()
@@ -91,9 +92,9 @@ class FilesysImpl final : public Filesys::Service {
                   << '\n';
 
         for (auto& range : args->stripe_ranges()) {
-            Bytes block_data;
-            if (!_data_storage.ReadFile(file_name, range.offset(),
-                                        range.count(), version, block_data)) {
+            Bytes block_data = _data_storage.ReadFile(file_name, range.offset(),
+                                                      range.count(), version);
+            if (block_data.empty()) {
                 std::cerr << "Failed to read " << file_name << '\n';
                 return grpc::Status(grpc::StatusCode::NOT_FOUND,
                                     "Version does not exist or has expired.");
@@ -116,7 +117,7 @@ class FilesysImpl final : public Filesys::Service {
         std::cerr << "Trying to write " << file_name << " at version "
                   << version << '\n';
 
-        spdlog::info("Server {} write {}", _server_idx, block_data);
+        // spdlog::info("Server {} write {}", _server_idx, block_data);
 
         const std::string public_key_str = args->metadata().public_key();
         Bytes public_key = Bytes(public_key_str.begin(), public_key_str.end());

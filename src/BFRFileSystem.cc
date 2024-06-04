@@ -1,13 +1,13 @@
 #include "BFRFileSystem.h"
 
 #include <grpcpp/grpcpp.h>
+#include <spdlog/fmt/ranges.h>
+#include <spdlog/spdlog.h>
 
 #include "async_query.h"
 #include "encode_decode.h"
 #include "filesys.grpc.pb.h"
 #include "signature.h"
-#include <spdlog/spdlog.h>
-#include <spdlog/fmt/ranges.h>
 
 using filesys::CreateFileArgs;
 using filesys::DeleteFileArgs;
@@ -63,9 +63,9 @@ BFRFileSystem::BFRFileSystem(const std::vector<std::string> &serverAddresses,
     numMalicious_ = numMalicious;
     numFaulty_ = numFaulty;
     blockSize_ = blockSize;
-    stripeSize_ = (blockSize - SigningKey::kSignatureSize) *
-                  (numServers_ - numFaulty_);
-    // TODO: Add option to read key from file
+    stripeSize_ =
+        (blockSize - SigningKey::kSignatureSize) * (numServers_ - numFaulty_);
+    signingKey_ = SigningKey("key", true);
     timeout_ = 10s;
 }
 
@@ -133,9 +133,10 @@ int BFRFileSystem::create(const char *path) const {
     CompletionQueue cq;
 
     std::vector<AsyncResponse<Empty>> responseBuffer(numServers_);
+    std::vector<ClientContext> contexts(numServers_);
 
     for (size_t serverId = 0; serverId < numServers_; ++serverId) {
-        ClientContext context;
+        ClientContext &context = contexts[serverId];
         const std::chrono::system_clock::time_point deadline =
             std::chrono::system_clock::now() + timeout_;
         context.set_deadline(deadline);
@@ -168,6 +169,7 @@ int BFRFileSystem::create(const char *path) const {
         if (successCount >= numServers_ - numFaulty_ + numMalicious_) {
             /* Sufficient servers successfully acknowledged create. */
             cq.Shutdown();
+            while (cq.Next(&tag, &ok));
             return 0;
         }
     }
@@ -186,7 +188,7 @@ std::optional<FileMetadata> BFRFileSystem::open(const char *path) const {
     std::vector<AsyncResponse<GetFileListReply>> responseBuffer(numServers_);
     std::vector<ClientContext> contexts(numServers_);
     for (size_t serverId = 0; serverId < numServers_; ++serverId) {
-        ClientContext& context = contexts[serverId];
+        ClientContext &context = contexts[serverId];
         const std::chrono::system_clock::time_point deadline =
             std::chrono::system_clock::now() + timeout_;
         context.set_deadline(deadline);
@@ -209,7 +211,7 @@ std::optional<FileMetadata> BFRFileSystem::open(const char *path) const {
         ++successCount;
         const size_t serverId = (size_t)tag;
         AsyncResponse<GetFileListReply> *reply = &responseBuffer[serverId];
-        if (reply->status.ok()) {
+        if (reply->status.ok() && reply->reply.files().size()) {
             const FileMetadata m = {
                 .version = reply->reply.files()[0].version(),
                 .fileSize = reply->reply.files()[0].metadata().file_size()};
@@ -224,6 +226,7 @@ std::optional<FileMetadata> BFRFileSystem::open(const char *path) const {
 
         if (successCount >= numServers_ - numFaulty_) {
             cq.Shutdown();
+            while (cq.Next(&tag, &ok));
             break;
         }
     }
@@ -269,8 +272,8 @@ int64_t BFRFileSystem::read(const char *path, char *buf, size_t size,
 
     const uint64_t endOffset = roundUp(offset + size, stripeSize_);
     const uint64_t endStripeId = endOffset / stripeSize_;
-    spdlog::debug("{} {} start{} {}, end {} {}", size, offset, startOffset, startStripeId,
-                  endOffset, endStripeId);
+    spdlog::debug("{} {} start{} {}, end {} {}", size, offset, startOffset,
+                  startStripeId, endOffset, endStripeId);
 
     const uint64_t numStripes = endStripeId - startStripeId;
     const uint32_t version = metadata.value().version;
@@ -293,7 +296,7 @@ int64_t BFRFileSystem::read(const char *path, char *buf, size_t size,
      */
     std::vector<std::vector<Bytes>> encodedBlocks(
         numStripes, std::vector<Bytes>(numServers_));
-    spdlog::debug("outside {}", (void*)&encodedBlocks);
+    spdlog::debug("outside {}", (void *)&encodedBlocks);
     spdlog::debug("outside {} {}", numStripes, encodedBlocks.size());
 
     bool ret = QueryServers<ReadBlocksReply>(
@@ -302,15 +305,16 @@ int64_t BFRFileSystem::read(const char *path, char *buf, size_t size,
         [&](const std::vector<AsyncResponse<ReadBlocksReply>> &responses,
             const std::vector<uint8_t> &replied,
             size_t &minimum_success) -> bool {
-    spdlog::debug("inside {}", (void*)&encodedBlocks);
-    spdlog::debug("inside {}", encodedBlocks.size());
+            spdlog::debug("inside {}", (void *)&encodedBlocks);
+            spdlog::debug("inside {}", encodedBlocks.size());
             size_t num_success = 0;
             for (size_t i = 0; i < responses.size(); ++i) {
                 if (!encodedBlocks[0][i].empty() || !replied[i] ||
                     !responses[i].status.ok())
                     continue;
                 auto &reply = responses[i].reply;
-                spdlog::debug("{} version {}", reply.block_data(0).size(), reply.version());
+                spdlog::debug("{} version {}", reply.block_data(0).size(),
+                              reply.version());
                 if (reply.block_data(0).size() != numStripes * blockSize_ ||
                     reply.version() != version)
                     continue;
@@ -334,10 +338,13 @@ int64_t BFRFileSystem::read(const char *path, char *buf, size_t size,
                      ++stripeOffset) {
                     const std::vector<Bytes> stripe =
                         encodedBlocks[stripeOffset];
-                    spdlog::debug("{}, {}, {}", stripeOffset, encodedBlocks.size(), stripe);
+                    spdlog::debug("{}, {}, {}", stripeOffset,
+                                  encodedBlocks.size(), stripe);
                     const uint64_t stripeId = startStripeId + stripeOffset;
-                    spdlog::debug("Decode {}, {}, {}, {}, {}, {}, {}", stripeSize_, numServers_, numFaulty_,
-                                  signingKey_.PublicKey(), path, stripeId, version);
+                    spdlog::debug("Decode {}, {}, {}, {}, {}, {}, {}",
+                                  stripeSize_, numServers_, numFaulty_,
+                                  signingKey_.PublicKey(), path, stripeId,
+                                  version);
                     const Bytes decodedStripe =
                         Decode(stripe, stripeSize_, numServers_, numFaulty_,
                                signingKey_, path, stripeId, version);
@@ -346,7 +353,8 @@ int64_t BFRFileSystem::read(const char *path, char *buf, size_t size,
                 }
                 memcpy(buf, bytesRead.data() + offsetDiff, size);
             } catch (DecodeError &e) {
-                spdlog::error("Decode error: {} {} {}", e.what(), e.remaining_blocks, num_success);
+                spdlog::error("Decode error: {} {} {}", e.what(),
+                              e.remaining_blocks, num_success);
                 minimum_success = num_success + e.remaining_blocks;
                 return false;
             }
@@ -413,8 +421,9 @@ int64_t BFRFileSystem::write(const char *path, const char *buf,
         const size_t stripeId = startStripeId + stripeOffset;
         Bytes rawStripe(stripesBuf + (stripeOffset * stripeSize_),
                         stripesBuf + ((stripeOffset + 1) * stripeSize_));
-        spdlog::debug("Encode {}, {}, {}, {}, {}, {}, {}", rawStripe, numServers_, numFaulty_,
-                        signingKey_.PublicKey(), path, stripeId, newVersion);
+        // spdlog::debug("Encode {}, {}, {}, {}, {}, {}, {}", rawStripe,
+        //               numServers_, numFaulty_, signingKey_.PublicKey(), path,
+        //               stripeId, newVersion);
         std::vector<Bytes> encodedStripe =
             Encode(rawStripe, numServers_, numFaulty_, signingKey_, path,
                    stripeId, newVersion);
@@ -423,14 +432,16 @@ int64_t BFRFileSystem::write(const char *path, const char *buf,
             blocksToWrite[serverId][stripeOffset] = encodedStripe[serverId];
         }
     }
+    std::free(stripesBuf);
 
     CompletionQueue cq;
 
     std::vector<AsyncResponse<Empty>> responseBuffer(numServers_);
+    std::vector<ClientContext> contexts(numServers_);
 
     for (size_t serverId = 0; serverId < numServers_; ++serverId) {
         std::cerr << "Talking to server " << serverId << std::endl;
-        ClientContext context;
+        ClientContext &context = contexts[serverId];
         const std::chrono::system_clock::time_point deadline =
             std::chrono::system_clock::now() + timeout_;
         context.set_deadline(deadline);
@@ -452,7 +463,7 @@ int64_t BFRFileSystem::write(const char *path, const char *buf,
             concatenatedBlocks.insert(concatenatedBlocks.end(), block.begin(),
                                       block.end());
         }
-        spdlog::debug("Write {}, {}", serverId, concatenatedBlocks);
+        // spdlog::debug("Write {}, {}", serverId, concatenatedBlocks);
         std::cerr << "size is " << concatenatedBlocks.size() << '\n';
         args.set_block_data(
             std::string(concatenatedBlocks.begin(), concatenatedBlocks.end()));
@@ -488,6 +499,7 @@ int64_t BFRFileSystem::write(const char *path, const char *buf,
         if (successCount >= numServers_ - numFaulty_ + numMalicious_) {
             /* Sufficient servers successfully acknowledged. */
             cq.Shutdown();
+            while (cq.Next(&tag, &ok));
             return size;
         }
     }
@@ -499,19 +511,19 @@ int64_t BFRFileSystem::write(const char *path, const char *buf,
 }
 
 int BFRFileSystem::unlink(const char *path) const {
-    ClientContext context;
-    const std::chrono::system_clock::time_point deadline =
-        std::chrono::system_clock::now() + timeout_;
-    context.set_deadline(deadline);
-
     DeleteFileArgs args;
     args.set_file_name(path);
 
     CompletionQueue cq;
 
     std::vector<AsyncResponse<Empty>> responseBuffer(numServers_);
+    std::vector<ClientContext> contexts(numServers_);
 
     for (size_t serverId = 0; serverId < numServers_; ++serverId) {
+        ClientContext &context = contexts[serverId];
+        const std::chrono::system_clock::time_point deadline =
+            std::chrono::system_clock::now() + timeout_;
+        context.set_deadline(deadline);
         std::unique_ptr<ClientAsyncResponseReader<Empty>> responseHeader =
             servers_[serverId]->PrepareAsyncDeleteFile(&context, args, &cq);
 
@@ -533,6 +545,8 @@ int BFRFileSystem::unlink(const char *path) const {
             spdlog::info("Delete {} success", path);
             if (successCount >= numServers_ - numFaulty_ + numMalicious_) {
                 /* Sufficient servers successfully acknowledged. */
+                cq.Shutdown();
+                while (cq.Next(&tag, &ok));
                 return 0;
             }
         } else {

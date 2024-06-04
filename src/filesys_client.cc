@@ -121,15 +121,18 @@ static struct fuse_operations bfr_filesystem_operations = {
 
 int main(int argc, char **argv) {
     CLI::App app;
-    app.set_config("--config", "../config.toml")->required();
+    app.set_config("--config", "../config.toml");
+
+    int index;
+    app.add_option("-i,--index", index)->required();
 
     CLI11_PARSE(app, argc, argv);
 
     const std::string configFile = app.get_config_ptr()->as<std::string>();
     const Config config = ParseConfig(configFile);
 
-    //auto logger = spdlog::basic_logger_mt("client_logger", "logs/client.log");
-    //spdlog::set_default_logger(logger);
+    // auto logger = spdlog::basic_logger_mt("client_logger",
+    // "logs/client.log"); spdlog::set_default_logger(logger);
     spdlog::set_pattern("[%t] %+");
     spdlog::set_level(spdlog::level::debug);
 
@@ -138,17 +141,57 @@ int main(int argc, char **argv) {
         std::make_unique<BFRFileSystem>(config.servers, config.num_malicious,
                                         config.num_faulty, config.block_size);
 
-    bfrFs->create("hello.txt");
-    auto file_list = bfrFs->getFileList();
-    for (const auto &file_name : file_list) {
-        std::cerr << file_name << '\n';
+    std::vector<std::string> files{"a.txt", "b.txt", "c.txt"};
+
+    bfrFs->create(files[index].c_str());
+
+    bool deleted = false;
+    char buf[100000] = {};
+    std::string last_wrote;
+    for (int i = 0; i < 300; i++) {
+        int op = rand() % 4;
+        std::cerr << "op: " << op << '\n';
+        switch (op) {
+            case 0: {
+                auto file_list = bfrFs->getFileList();
+                for (const auto &file_name : file_list) {
+                    assert(files.find(file_name) != files.end());
+                }
+                std::cerr << "success\n";
+            } break;
+            case 1: {
+                std::memset(buf, 0, sizeof(buf));
+                int file_index = rand() % files.size();
+                bfrFs->read(files[file_index].c_str(), buf, 100000, 0);
+                if (file_index == index) {
+                    assert(std::string(buf) == last_wrote);
+                }
+                std::cerr << "success\n";
+            } break;
+            case 2: {
+                if (deleted) {
+                    bfrFs->create(files[index].c_str());
+                    deleted = false;
+                }
+                char write_buf[100000] = {};
+                int length = rand() % 100000;
+                for (int i = 0; i < length; i++) {
+                    write_buf[i] = 'a' + rand() % 26;
+                }
+                bfrFs->write(files[index].c_str(), write_buf, length, 0);
+                last_wrote = std::string(write_buf);
+            } break;
+            case 3: {
+                if (deleted) {
+                    bfrFs->create(files[index].c_str());
+                    deleted = false;
+                } else {
+                    bfrFs->unlink(files[index].c_str());
+                    deleted = true;
+                }
+            } break;
+        }
     }
-    bfrFs->write("hello.txt", "Hello, World!", 13, 0);
-    std::cerr << "Write returned\n" << std::flush;
-    sleep(10);
-    char buffer[100] = {};
-    bfrFs->read("hello.txt", buffer, 13, 0);
-    std::cerr << buffer << '\n';
 
     // return fuse_main(fuse_argc, fuse_argv, &bfr_filesystem_operations, NULL);
 }
