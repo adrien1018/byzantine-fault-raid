@@ -1,4 +1,8 @@
 cmake_minimum_required(VERSION 3.11)
+
+set(CMAKE_CXX_COMPILER "g++-14")
+set(CMAKE_CXX_STANDARD "17")
+
 project(Filesys C CXX)
 
 set(CMAKE_CXX_FLAGS "-g -O2 -Wall -std=c++17")
@@ -70,6 +74,7 @@ add_custom_command(
 include_directories("${CMAKE_CURRENT_BINARY_DIR}")
 include_directories("${CMAKE_SOURCE_DIR}/include")
 include_directories(${FUSE_INCLUDE_DIRS})
+link_directories(${FUSE_LIBRARY_DIRS})
 
 file(GLOB filesys_src CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/*.cc")
 list(REMOVE_ITEM filesys_src "${CMAKE_SOURCE_DIR}/src/filesys_server.cc" "${CMAKE_SOURCE_DIR}/src/filesys_client.cc" "${CMAKE_SOURCE_DIR}/src/data_storage_test.cc" "${CMAKE_SOURCE_DIR}/src/BFRFileSystem.cc")
@@ -96,6 +101,7 @@ target_link_libraries(BFRFileSystem ${COMMON_LIBRARIES})
 add_executable(filesys_server "${CMAKE_SOURCE_DIR}/src/filesys_server.cc")
 add_executable(filesys_client "${CMAKE_SOURCE_DIR}/src/filesys_client.cc" "${CMAKE_SOURCE_DIR}/src/BFRFileSystem.cc")
 target_link_libraries(filesys_server ${COMMON_LIBRARIES})
+
 target_link_libraries(filesys_client ${COMMON_LIBRARIES} ${FUSE_LIBRARIES})
 
 if (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
