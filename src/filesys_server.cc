@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <string>
 #include <unordered_map>
+#include <spdlog/fmt/ranges.h>
 
 #include "async_query.h"
 #include "config.h"
@@ -114,6 +115,8 @@ class FilesysImpl final : public Filesys::Service {
         Bytes block_data = Bytes(block_data_str.begin(), block_data_str.end());
         std::cerr << "Trying to write " << file_name << " at version "
                   << version << '\n';
+                  
+        spdlog::info("Server {} write {}", _server_idx, block_data);
 
         const std::string public_key_str = args->metadata().public_key();
         Bytes public_key = Bytes(public_key_str.begin(), public_key_str.end());
@@ -260,6 +263,9 @@ static void RunServer(const std::string& ip_address, uint32_t server_idx,
 }
 
 int main(int argc, char* argv[]) {
+    spdlog::set_pattern("[%t] %+");
+    spdlog::set_level(spdlog::level::debug);
+
     /* Parse command line arguments. */
     CLI::App filesys;
 

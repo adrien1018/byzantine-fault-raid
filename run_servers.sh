@@ -1,3 +1,4 @@
+killall filesys_server
 rm -rf s0 s1 s2 s3
 ./filesys_server --port 8080 --index 0 -s s0 &
 ./filesys_server --port 8081 --index 1 -s s1 &

@@ -6,7 +6,8 @@
 #include "encode_decode.h"
 #include "filesys.grpc.pb.h"
 #include "signature.h"
-#include "spdlog/spdlog.h"
+#include <spdlog/spdlog.h>
+#include <spdlog/fmt/ranges.h>
 
 using filesys::CreateFileArgs;
 using filesys::DeleteFileArgs;
@@ -258,6 +259,7 @@ int64_t BFRFileSystem::read(const char *path, char *buf, size_t size,
         /* File doesn't exist. */
         return -ENOENT;
     }
+    if (size == 0) return 0;
 
     const uint64_t startOffset = roundDown(offset, stripeSize_);
     const uint64_t startStripeId = startOffset / stripeSize_;
@@ -265,6 +267,8 @@ int64_t BFRFileSystem::read(const char *path, char *buf, size_t size,
 
     const uint64_t endOffset = roundUp(offset + size, stripeSize_);
     const uint64_t endStripeId = endOffset / stripeSize_;
+    spdlog::debug("{} {} start{} {}, end {} {}", size, offset, startOffset, startStripeId,
+                  endOffset, endStripeId);
 
     const uint64_t numStripes = endStripeId - startStripeId;
     const uint32_t version = metadata.value().version;
@@ -287,6 +291,8 @@ int64_t BFRFileSystem::read(const char *path, char *buf, size_t size,
      */
     std::vector<std::vector<Bytes>> encodedBlocks(
         numStripes, std::vector<Bytes>(numServers_));
+    spdlog::debug("outside {}", (void*)&encodedBlocks);
+    spdlog::debug("outside {} {}", numStripes, encodedBlocks.size());
 
     bool ret = QueryServers<ReadBlocksReply>(
         QueryServers_(), args, &Filesys::Stub::PrepareAsyncReadBlocks,
@@ -294,6 +300,8 @@ int64_t BFRFileSystem::read(const char *path, char *buf, size_t size,
         [&](const std::vector<AsyncResponse<ReadBlocksReply>> &responses,
             const std::vector<uint8_t> &replied,
             size_t &minimum_success) -> bool {
+    spdlog::debug("inside {}", (void*)&encodedBlocks);
+    spdlog::debug("inside {}", encodedBlocks.size());
             size_t num_success = 0;
             for (size_t i = 0; i < responses.size(); ++i) {
                 if (!encodedBlocks[i].empty() || !replied[i] ||
@@ -321,6 +329,7 @@ int64_t BFRFileSystem::read(const char *path, char *buf, size_t size,
                 Bytes bytesRead;
                 for (size_t stripeOffset = 0; stripeOffset < numStripes;
                      ++stripeOffset) {
+                    spdlog::debug("{}, {}", stripeOffset, encodedBlocks.size());
                     const std::vector<Bytes> stripe =
                         encodedBlocks[stripeOffset];
                     const uint64_t stripeId = startStripeId + stripeOffset;
@@ -435,6 +444,7 @@ int64_t BFRFileSystem::write(const char *path, const char *buf,
             concatenatedBlocks.insert(concatenatedBlocks.end(), block.begin(),
                                       block.end());
         }
+        spdlog::debug("Write {}, {}", serverId, concatenatedBlocks);
         std::cerr << "size is " << concatenatedBlocks.size() << '\n';
         args.set_block_data(
             std::string(concatenatedBlocks.begin(), concatenatedBlocks.end()));

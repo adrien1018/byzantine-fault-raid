@@ -128,8 +128,10 @@ int main(int argc, char **argv) {
     const std::string configFile = app.get_config_ptr()->as<std::string>();
     const Config config = ParseConfig(configFile);
 
-    auto logger = spdlog::basic_logger_mt("client_logger", "logs/client.log");
-    spdlog::set_default_logger(logger);
+    //auto logger = spdlog::basic_logger_mt("client_logger", "logs/client.log");
+    //spdlog::set_default_logger(logger);
+    spdlog::set_pattern("[%t] %+");
+    spdlog::set_level(spdlog::level::debug);
 
     /* Initialize BFR-fs connection. */
     bfrFs =
