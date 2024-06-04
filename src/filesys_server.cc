@@ -203,7 +203,7 @@ class FilesysImpl final : public Filesys::Service {
                         if (versions.size() > _config.num_malicious &&
                             _data_storage.GetLatestVersion(file_name) <
                                 target_version) {
-                            std::thread([this, file_name, target_version]() {
+                            std::thread([this, file_name=file_name, target_version]() {
                                 // Wait for possible write to come.
                                 std::this_thread::sleep_for(15s);
                                 uint32_t current_version =
