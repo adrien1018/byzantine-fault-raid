@@ -144,8 +144,9 @@ int main(int argc, char **argv) {
         std::cerr << file_name << '\n';
     }
     bfrFs->write("hello.txt", "Hello, World!", 13, 0);
-    std::cerr << "Write returned\n";
-    char buffer[100];
+    std::cerr << "Write returned\n" << std::flush;
+    sleep(10);
+    char buffer[100] = {};
     bfrFs->read("hello.txt", buffer, 13, 0);
     std::cerr << buffer << '\n';
 

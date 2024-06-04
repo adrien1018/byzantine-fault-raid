@@ -23,6 +23,7 @@ bool WaitResponses(size_t N, grpc::CompletionQueue& cq,
     bool ok = false;
     std::vector<uint8_t> replied(N);
     size_t num_success = 0;
+    spdlog::info("{}: Waiting for {} responses", log_tag, N);
     while (cq.Next(&idx, &ok)) {
         size_t i = (size_t)idx;
         replied[i] = true;
@@ -67,7 +68,7 @@ bool WaitResponses(size_t N, grpc::CompletionQueue& cq,
                 if (log_tag.size()) {
                     spdlog::info(
                         "{}: Callback returned false, new minimum_success={}",
-                        log_tag, num_success);
+                        log_tag, minimum_success);
                 }
             }
         }
@@ -108,8 +109,10 @@ bool QueryServers(const std::vector<Stub*>& servers,
                   Callback&& callback, const std::string& log_tag = "") {
     grpc::CompletionQueue cq;
     std::vector<AsyncResponse<ResponseClass>> response_buffer(servers.size());
+    
+    std::vector<grpc::ClientContext> contexts(servers.size());
     for (size_t i = 0; i < servers.size(); i++) {
-        grpc::ClientContext context;
+        grpc::ClientContext& context = contexts[i];
         context.set_deadline(std::chrono::system_clock::now() + timeout);
         std::unique_ptr<grpc::ClientAsyncResponseReader<ResponseClass>>
             response_header = (servers[i]->*prepare)(&context, request, &cq);
@@ -117,6 +120,7 @@ bool QueryServers(const std::vector<Stub*>& servers,
         response_header->Finish(&response_buffer[i].reply,
                                 &response_buffer[i].status, (void*)i);
     }
+    spdlog::info("{}: Requests sent, waiting for responses", log_tag);
 
     return WaitResponses<ResponseClass>(
         servers.size(), cq, response_buffer, minimum_success, additional_wait,

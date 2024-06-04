@@ -184,8 +184,9 @@ std::optional<FileMetadata> BFRFileSystem::open(const char *path) const {
     CompletionQueue cq;
 
     std::vector<AsyncResponse<GetFileListReply>> responseBuffer(numServers_);
+    std::vector<ClientContext> contexts(numServers_);
     for (size_t serverId = 0; serverId < numServers_; ++serverId) {
-        ClientContext context;
+        ClientContext& context = contexts[serverId];
         const std::chrono::system_clock::time_point deadline =
             std::chrono::system_clock::now() + timeout_;
         context.set_deadline(deadline);
@@ -227,6 +228,7 @@ std::optional<FileMetadata> BFRFileSystem::open(const char *path) const {
         }
     }
 
+    if (metadataCounts.empty()) return std::nullopt;
     const auto commonMetadata =
         std::max_element(std::begin(metadataCounts), std::end(metadataCounts),
                          [](const std::pair<FileMetadata, int> &p1,
@@ -304,11 +306,12 @@ int64_t BFRFileSystem::read(const char *path, char *buf, size_t size,
     spdlog::debug("inside {}", encodedBlocks.size());
             size_t num_success = 0;
             for (size_t i = 0; i < responses.size(); ++i) {
-                if (!encodedBlocks[i].empty() || !replied[i] ||
+                if (!encodedBlocks[0][i].empty() || !replied[i] ||
                     !responses[i].status.ok())
                     continue;
                 auto &reply = responses[i].reply;
-                if (reply.block_data_size() != numStripes * blockSize_ ||
+                spdlog::debug("{} version {}", reply.block_data(0).size(), reply.version());
+                if (reply.block_data(0).size() != numStripes * blockSize_ ||
                     reply.version() != version)
                     continue;
 
@@ -319,7 +322,7 @@ int64_t BFRFileSystem::read(const char *path, char *buf, size_t size,
                     const Bytes::const_iterator first =
                         blocks.begin() + (stripeOffset * blockSize_);
                     const Bytes::const_iterator last =
-                        blocks.begin() + ((stripeOffset + 1) + blockSize_);
+                        blocks.begin() + ((stripeOffset + 1) * blockSize_);
                     encodedBlocks[stripeOffset][i] = Bytes(first, last);
                 }
                 num_success++;
@@ -329,10 +332,12 @@ int64_t BFRFileSystem::read(const char *path, char *buf, size_t size,
                 Bytes bytesRead;
                 for (size_t stripeOffset = 0; stripeOffset < numStripes;
                      ++stripeOffset) {
-                    spdlog::debug("{}, {}", stripeOffset, encodedBlocks.size());
                     const std::vector<Bytes> stripe =
                         encodedBlocks[stripeOffset];
+                    spdlog::debug("{}, {}, {}", stripeOffset, encodedBlocks.size(), stripe);
                     const uint64_t stripeId = startStripeId + stripeOffset;
+                    spdlog::debug("Decode {}, {}, {}, {}, {}, {}, {}", stripeSize_, numServers_, numFaulty_,
+                                  signingKey_.PublicKey(), path, stripeId, version);
                     const Bytes decodedStripe =
                         Decode(stripe, stripeSize_, numServers_, numFaulty_,
                                signingKey_, path, stripeId, version);
@@ -341,6 +346,7 @@ int64_t BFRFileSystem::read(const char *path, char *buf, size_t size,
                 }
                 memcpy(buf, bytesRead.data() + offsetDiff, size);
             } catch (DecodeError &e) {
+                spdlog::error("Decode error: {} {} {}", e.what(), e.remaining_blocks, num_success);
                 minimum_success = num_success + e.remaining_blocks;
                 return false;
             }
@@ -373,7 +379,7 @@ int64_t BFRFileSystem::write(const char *path, const char *buf,
     const uint64_t numStripes = endStripeId - startStripeId;
 
     const uint64_t stripesBufSize = numStripes * stripeSize_;
-    char *stripesBuf = (char *)std::malloc(stripesBufSize);
+    char *stripesBuf = (char *)std::calloc(1, stripesBufSize);
     if (stripesBuf == nullptr) {
         return -ENOMEM;
     }
@@ -407,6 +413,8 @@ int64_t BFRFileSystem::write(const char *path, const char *buf,
         const size_t stripeId = startStripeId + stripeOffset;
         Bytes rawStripe(stripesBuf + (stripeOffset * stripeSize_),
                         stripesBuf + ((stripeOffset + 1) * stripeSize_));
+        spdlog::debug("Encode {}, {}, {}, {}, {}, {}, {}", rawStripe, numServers_, numFaulty_,
+                        signingKey_.PublicKey(), path, stripeId, newVersion);
         std::vector<Bytes> encodedStripe =
             Encode(rawStripe, numServers_, numFaulty_, signingKey_, path,
                    stripeId, newVersion);
