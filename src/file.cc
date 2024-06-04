@@ -76,15 +76,6 @@ File::File(const std::string& directory, const std::string& file_name,
         throw std::runtime_error("Failed to open fail");
     }
 
-    _file_stream.write((char*)&_version, sizeof(uint32_t));
-    _file_stream.write((char*)&_deleted, sizeof(bool));
-    _file_stream.write((char*)&_file_size, sizeof(uint64_t));
-    uint32_t public_key_size = public_key.size();
-    _file_stream.write((char*)&public_key_size, sizeof(uint32_t));
-    _file_stream.write((char*)public_key.data(), public_key_size);
-    _file_stream.flush();
-    _base_position = _file_stream.tellp();
-
     fs::path log_directory = _directory / fs::path(file_name + "_log");
     fs::create_directory(log_directory);
 }
@@ -147,6 +138,18 @@ void File::LoadUndoRecords(const std::string& log_directory) {
     }
 }
 
+void File::WriteMetadata() {
+    _file_stream.write((char*)&_version, sizeof(uint32_t));
+    _file_stream.write((char*)&_deleted, sizeof(bool));
+    _file_stream.write((char*)&_file_size, sizeof(uint64_t));
+    Bytes public_key = _public_key.PublicKey();
+    uint32_t public_key_size = public_key.size();
+    _file_stream.write((char*)&public_key_size, sizeof(uint32_t));
+    _file_stream.write((char*)public_key.data(), public_key_size);
+    _file_stream.flush();
+    _base_position = _file_stream.tellp();
+}
+
 bool File::WriteStripes(uint64_t stripe_offset, uint64_t num_stripes,
                         uint32_t block_idx, uint32_t version,
                         const Bytes& block_data, const Metadata& metadata) {
@@ -178,9 +181,6 @@ bool File::WriteStripes(uint64_t stripe_offset, uint64_t num_stripes,
     _file_stream.seekp(_base_position + stripe_offset * _block_size);
     _file_stream.write((char*)block_data.data(), block_data.size());
     _file_stream.flush();
-    std::cerr << "Written " << block_data.size() << " at "
-              << _base_position + stripe_offset * _block_size << '\n';
-    std::cerr << "File size " << _file_stream.tellp() << '\n';
     _version++;
     _file_size = metadata.file_size;
 
@@ -243,10 +243,6 @@ void File::Delete() {
     fs::path file_path = _directory / _file_name;
     fs::remove(file_path);
 
-    std::fstream::openmode open_mode =
-        std::fstream::binary | std::fstream::in | std::fstream::out;
-    _file_stream.open(file_path, open_mode);
-
     _deleted = true;
     _file_size = 0;
     _version++;
@@ -262,8 +258,20 @@ bool File::UpdateSignKey(const Bytes& public_key) {
     if (!_deleted) {
         return false;
     }
+
+    std::fstream::openmode open_mode = std::fstream::binary | std::fstream::in |
+                                       std::fstream::out | std::fstream::trunc;
+    fs::path file_path = _directory / _file_name;
+    _file_stream.open(file_path, open_mode);
+
+    if (_file_stream.fail()) {
+        throw std::runtime_error("Failed to open fail");
+    }
+
     _deleted = false;
     _public_key = SigningKey(public_key, false);
+    WriteMetadata();
+    std::cerr << "Stripe size after: " << GetCurrentStripeSize() << '\n';
     return true;
 }
 
@@ -349,7 +357,7 @@ void File::GarbageCollectRecord() {
 }
 
 uint64_t File::GetCurrentStripeSize() {
-    _file_stream.seekg(std::ios::end);
+    _file_stream.seekg(0, std::ios::end);
     std::cerr << _file_stream.tellg() << ' ' << _base_position << '\n';
     return static_cast<uint64_t>(_file_stream.tellg()) - _base_position;
 }

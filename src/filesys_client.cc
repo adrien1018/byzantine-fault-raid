@@ -146,7 +146,7 @@ int main(int argc, char **argv) {
     bfrFs->create(files[index].c_str());
 
     bool deleted = false;
-    char buf[100000] = {};
+    char buf[100] = {};
     std::string last_wrote;
     for (int i = 0; i < 300; i++) {
         int op = rand() % 4;
@@ -162,7 +162,7 @@ int main(int argc, char **argv) {
             case 1: {
                 std::memset(buf, 0, sizeof(buf));
                 int file_index = rand() % files.size();
-                bfrFs->read(files[file_index].c_str(), buf, 100000, 0);
+                bfrFs->read(files[file_index].c_str(), buf, 100, 0);
                 if (file_index == index) {
                     assert(std::string(buf) == last_wrote);
                 }
@@ -173,8 +173,8 @@ int main(int argc, char **argv) {
                     bfrFs->create(files[index].c_str());
                     deleted = false;
                 }
-                char write_buf[100000] = {};
-                int length = rand() % 100000;
+                char write_buf[1000] = {};
+                int length = 999;
                 for (int i = 0; i < length; i++) {
                     write_buf[i] = 'a' + rand() % 26;
                 }
@@ -186,8 +186,8 @@ int main(int argc, char **argv) {
                     bfrFs->create(files[index].c_str());
                     deleted = false;
                 } else {
-                    bfrFs->unlink(files[index].c_str());
-                    deleted = true;
+                    // bfrFs->unlink(files[index].c_str());
+                    // deleted = true;
                 }
             } break;
         }

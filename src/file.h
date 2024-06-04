@@ -58,6 +58,7 @@ class File {
     uint64_t GetCurrentStripeSize();
     void LoadUndoRecords(const std::string& log_directory);
     UndoRecord LoadUndoRecord(const std::string& record_path);
+    void WriteMetadata();
 
    public:
     File(const std::string& directory, const std::string& file_name,

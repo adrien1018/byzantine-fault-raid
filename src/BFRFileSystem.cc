@@ -341,10 +341,10 @@ int64_t BFRFileSystem::read(const char *path, char *buf, size_t size,
                     spdlog::debug("{}, {}, {}", stripeOffset,
                                   encodedBlocks.size(), stripe);
                     const uint64_t stripeId = startStripeId + stripeOffset;
-                    spdlog::debug("Decode {}, {}, {}, {}, {}, {}, {}",
-                                  stripeSize_, numServers_, numFaulty_,
-                                  signingKey_.PublicKey(), path, stripeId,
-                                  version);
+                    // spdlog::debug("Decode {}, {}, {}, {}, {}, {}, {}",
+                    //               stripeSize_, numServers_, numFaulty_,
+                    //               signingKey_.PublicKey(), path, stripeId,
+                    //               version);
                     const Bytes decodedStripe =
                         Decode(stripe, stripeSize_, numServers_, numFaulty_,
                                signingKey_, path, stripeId, version);
