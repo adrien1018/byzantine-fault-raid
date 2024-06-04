@@ -4,13 +4,13 @@
 #include <grpcpp/server.h>
 #include <grpcpp/server_builder.h>
 #include <grpcpp/server_context.h>
+#include <spdlog/fmt/ranges.h>
 
 #include <CLI/CLI.hpp>
 #include <algorithm>
 #include <filesystem>
 #include <string>
 #include <unordered_map>
-#include <spdlog/fmt/ranges.h>
 
 #include "async_query.h"
 #include "config.h"
@@ -115,7 +115,7 @@ class FilesysImpl final : public Filesys::Service {
         Bytes block_data = Bytes(block_data_str.begin(), block_data_str.end());
         std::cerr << "Trying to write " << file_name << " at version "
                   << version << '\n';
-                  
+
         spdlog::info("Server {} write {}", _server_idx, block_data);
 
         const std::string public_key_str = args->metadata().public_key();
@@ -149,6 +149,7 @@ class FilesysImpl final : public Filesys::Service {
                 std::string public_key_str = std::string(
                     public_key_bytes.begin(), public_key_bytes.end());
                 file_info->mutable_metadata()->set_public_key(public_key_str);
+                file_info->mutable_metadata()->set_file_size(file->FileSize());
             }
         }
         return Status::OK;
@@ -214,7 +215,8 @@ class FilesysImpl final : public Filesys::Service {
                         }
                     }
                     return true;
-                }, "GetFileList");
+                },
+                "GetFileList");
             std::this_thread::sleep_for(10s);
         }
     }
@@ -236,7 +238,8 @@ class FilesysImpl final : public Filesys::Service {
                     // TODO: Finish after finalizing update log format
                     // update target_version if needed
                     return true;
-                }, "GetUpdateLog");
+                },
+                "GetUpdateLog");
             // TODO: merge segments
             // TODO: read file for each segment; continue if fail
             break;

@@ -179,6 +179,7 @@ bool File::WriteStripes(uint64_t stripe_offset, uint64_t num_stripes,
     _file_stream.write((char*)block_data.data(), block_data.size());
     _file_stream.flush();
     _version++;
+    _file_size = metadata.file_size;
 
     return true;
 }
