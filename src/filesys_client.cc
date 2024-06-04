@@ -193,5 +193,10 @@ int main(int argc, char **argv) {
         }
     }
 
-    // return fuse_main(fuse_argc, fuse_argv, &bfr_filesystem_operations, NULL);
+    /*
+    const int fuse_argc = 2;
+    char *fuse_argv[] = {argv[0], (char *) config.fuse_mount_point.c_str()};
+    return fuse_main(fuse_argc, fuse_argv, &bfr_filesystem_operations, NULL);
+    */
 }
+
