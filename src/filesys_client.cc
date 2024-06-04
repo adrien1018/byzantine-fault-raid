@@ -195,8 +195,8 @@ int main(int argc, char **argv) {
     }
 
     /*
-    const int fuse_argc = 2;
-    char *fuse_argv[] = {argv[0], (char *) config.fuse_mount_point.c_str()};
+    const int fuse_argc = 3;
+    char *fuse_argv[] = {argv[0], (char *) config.fuse_mount_point.c_str(), "-f"};
     return fuse_main(fuse_argc, fuse_argv, &bfr_filesystem_operations, NULL);
     */
 }

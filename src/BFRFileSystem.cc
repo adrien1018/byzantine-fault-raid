@@ -83,12 +83,17 @@ std::unordered_set<std::string> BFRFileSystem::getFileList() const {
     args.set_include_deleted(false);
 
     bool ret = QueryServers<GetFileListReply>(
-        QueryServers_(), args, &Filesys::Stub::PrepareAsyncGetFileList,
-        numServers_ - numFaulty_, 100ms, timeout_,
+        QueryServers_(),
+        args,
+        &Filesys::Stub::PrepareAsyncGetFileList,
+        numServers_ - numFaulty_,
+        100ms,
+        timeout_,
         [&](const std::vector<AsyncResponse<GetFileListReply>> &responses,
             const std::vector<uint8_t> &replied,
             size_t &minimum_success) -> bool {
-            for (size_t i = 0; i < responses.size(); ++i) {
+            for (size_t i = 0; i < responses.size(); ++i)
+            {
                 if (!replied[i] || !responses[i].status.ok()) continue;
                 auto &reply = responses[i].reply;
                 /*
@@ -109,7 +114,8 @@ std::unordered_set<std::string> BFRFileSystem::getFileList() const {
             }
             return true;
         },
-        "GetFileList");
+        "GetFileList"
+    );
 
     /*
      * Only consider filenames most common filenames
@@ -184,55 +190,45 @@ std::optional<FileMetadata> BFRFileSystem::open(const char *path) const {
     args.set_file_name(path);
     args.set_include_deleted(false);
 
-    CompletionQueue cq;
-
-    std::vector<AsyncResponse<GetFileListReply>> responseBuffer(numServers_);
-    std::vector<ClientContext> contexts(numServers_);
-    for (size_t serverId = 0; serverId < numServers_; ++serverId) {
-        ClientContext &context = contexts[serverId];
-        const std::chrono::system_clock::time_point deadline =
-            std::chrono::system_clock::now() + timeout_;
-        context.set_deadline(deadline);
-        std::unique_ptr<ClientAsyncResponseReader<GetFileListReply>>
-            responseHeader = servers_[serverId]->PrepareAsyncGetFileList(
-                &context, args, &cq);
-        responseHeader->StartCall();
-        responseHeader->Finish(&responseBuffer[serverId].reply,
-                               &responseBuffer[serverId].status,
-                               (void *)serverId);
-    }
-
     std::unordered_map<FileMetadata, int> metadataCounts;
 
-    void *tag;
-    bool ok = false;
-    int successCount = 0;
+    bool ret = QueryServers<GetFileListReply>(
+        QueryServers_(),
+        args,
+        &Filesys::Stub::PrepareAsyncGetFileList,
+        numServers_ - numFaulty_,
+        100ms,
+        timeout_,
+        [&](const std::vector<AsyncResponse<GetFileListReply>> &responses,
+            const std::vector<uint8_t> &replied,
+            size_t &minimum_success) -> bool
+        {
+            for (size_t i = 0; i < responses.size(); ++i)
+            {
+                if (!replied[i] || !responses[i].status.ok())
+                {
+                    continue;
+                }
+                auto &reply = responses[i].reply;
+                if (!reply.files().size())
+                {
+                    continue;
+                }
+                const FileMetadata m = {
+                    .version = reply.files()[0].version(),
+                    .fileSize = reply.files()[0].metadata().file_size()};
+                ++metadataCounts[m];
+            }
+            return true;
+        },
+        "Open"
+    );
 
-    while (cq.Next(&tag, &ok)) {
-        ++successCount;
-        const size_t serverId = (size_t)tag;
-        AsyncResponse<GetFileListReply> *reply = &responseBuffer[serverId];
-        if (reply->status.ok() && reply->reply.files().size()) {
-            const FileMetadata m = {
-                .version = reply->reply.files()[0].version(),
-                .fileSize = reply->reply.files()[0].metadata().file_size()};
-            ++metadataCounts[m];
-
-            spdlog::info("Get {} metadata on server {} success", path,
-                         serverId);
-
-        } else {
-            spdlog::warn("Get {} metadata on server {} FAILED", path, serverId);
-        }
-
-        if (successCount >= numServers_ - numFaulty_) {
-            cq.Shutdown();
-            while (cq.Next(&tag, &ok));
-            break;
-        }
+    if (metadataCounts.empty())
+    {
+        return std::nullopt;
     }
 
-    if (metadataCounts.empty()) return std::nullopt;
     const auto commonMetadata =
         std::max_element(std::begin(metadataCounts), std::end(metadataCounts),
                          [](const std::pair<FileMetadata, int> &p1,
