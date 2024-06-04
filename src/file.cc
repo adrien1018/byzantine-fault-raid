@@ -420,3 +420,8 @@ std::set<Segment> File::ReconstructVersion(uint32_t version) {
 
     return segments;
 }
+
+uint64_t File::FileSize() {
+    std::lock_guard<std::mutex> lock(_mu);
+    return _file_size;
+}

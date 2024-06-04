@@ -13,7 +13,8 @@
 #include "signature.h"
 
 using Clock = std::chrono::steady_clock;
-using Segment = std::tuple<uint64_t, uint64_t, uint32_t>; // (start, end, version)
+using Segment =
+    std::tuple<uint64_t, uint64_t, uint32_t>;  // (start, end, version)
 
 struct Metadata {
     Bytes public_key;
@@ -75,6 +76,7 @@ class File {
     uint32_t Version();
     std::string FileName() const;
     Bytes PublicKey() const;
+    uint64_t FileSize();
 };
 
 #endif
