@@ -53,7 +53,8 @@ static uint64_t roundUp(const uint64_t numToRound, const uint64_t multiple) {
 
 BFRFileSystem::BFRFileSystem(const std::vector<std::string> &serverAddresses,
                              const int numMalicious, const int numFaulty,
-                             const int blockSize) {
+                             const int blockSize, const std::string &signing_key_path)
+{
     for (const std::string &address : serverAddresses) {
         std::shared_ptr<Channel> channel =
             CreateChannel(address, InsecureChannelCredentials());
@@ -65,7 +66,7 @@ BFRFileSystem::BFRFileSystem(const std::vector<std::string> &serverAddresses,
     blockSize_ = blockSize;
     stripeSize_ =
         (blockSize - SigningKey::kSignatureSize) * (numServers_ - numFaulty_);
-    signingKey_ = SigningKey("key", true);
+    signingKey_ = SigningKey(signing_key_path, true);
     timeout_ = 10s;
 }
 

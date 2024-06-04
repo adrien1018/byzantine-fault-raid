@@ -16,6 +16,7 @@ Config ParseConfig(const std::string& config_file) {
     }
 
     config.fuse_mount_point = toml_config["fuse_mount_point"].value<std::string>().value();
+    config.signing_key = toml_config["signing_key"].value<std::string>().value();
 
     return config;
 }

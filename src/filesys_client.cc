@@ -139,7 +139,8 @@ int main(int argc, char **argv) {
     /* Initialize BFR-fs connection. */
     bfrFs =
         std::make_unique<BFRFileSystem>(config.servers, config.num_malicious,
-                                        config.num_faulty, config.block_size);
+                                        config.num_faulty, config.block_size,
+                                        config.signing_key);
 
     std::vector<std::string> files{"a.txt", "b.txt", "c.txt"};
 

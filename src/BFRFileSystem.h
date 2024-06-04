@@ -41,7 +41,7 @@ class BFRFileSystem final {
      */
     BFRFileSystem(const std::vector<std::string> &serverAddresses,
                   const int numMalicious, const int numFaulty,
-                  const int blockSize);
+                  const int blockSize, const std::string &signing_key_path);
 
     /*
      * Returns the list of files.
