@@ -43,12 +43,12 @@ class File {
     uint32_t _version;
     uint32_t _first_image_version;
     std::map<uint32_t, UndoRecord> _update_record;
-    std::thread _garbage_collection;
     std::fstream _file_stream;
     std::atomic<bool> _file_closed;
     uint64_t _file_size;
     bool _deleted;
     uint32_t _base_position;
+    std::thread _garbage_collection;
     const uint32_t _block_size;
 
     fs::path UndoLogPath(uint32_t version) const;

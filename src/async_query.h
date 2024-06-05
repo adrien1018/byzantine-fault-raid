@@ -23,16 +23,20 @@ bool WaitResponses(size_t N, grpc::CompletionQueue& cq,
     bool ok = false;
     std::vector<uint8_t> replied(N);
     size_t num_success = 0;
+    size_t num_received = 0;
     spdlog::info("{}: Waiting for {} responses", log_tag, N);
     while (cq.Next(&idx, &ok)) {
         size_t i = (size_t)idx;
         replied[i] = true;
+        if (ok) num_received++;
         if (response_buffer[i].status.ok()) num_success++;
         if (log_tag.size()) {
             spdlog::info(
                 "{}: Got response from server {}, ok={}, num_success={}",
                 log_tag, i, response_buffer[i].status.ok(), num_success);
         }
+        if (num_received - num_success > N - minimum_success)
+            break; /* Too many failures. */
         if (num_success >= minimum_success) {
             auto deadline = std::chrono::system_clock::now() + additional_wait;
             while (cq.AsyncNext(&idx, &ok, deadline) ==
@@ -109,7 +113,7 @@ bool QueryServers(const std::vector<Stub*>& servers,
                   Callback&& callback, const std::string& log_tag = "") {
     grpc::CompletionQueue cq;
     std::vector<AsyncResponse<ResponseClass>> response_buffer(servers.size());
-    
+
     std::vector<grpc::ClientContext> contexts(servers.size());
     for (size_t i = 0; i < servers.size(); i++) {
         grpc::ClientContext& context = contexts[i];
