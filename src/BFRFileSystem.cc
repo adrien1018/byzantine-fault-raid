@@ -153,7 +153,7 @@ int BFRFileSystem::create(const char *path) const {
         "Create"
     );
 
-    return createSuccess ? 0 : -EEXIST;
+    return createSuccess ? 0 : -EIO;
 }
 
 std::optional<FileMetadata> BFRFileSystem::open(const char *path) const {
@@ -401,6 +401,7 @@ int64_t BFRFileSystem::write(const char *path, const char *buf,
             blocksToWrite[serverId][stripeOffset] = encodedStripe[serverId];
         }
     }
+
     std::free(stripesBuf);
 
     CompletionQueue cq;
@@ -483,49 +484,22 @@ int BFRFileSystem::unlink(const char *path) const {
     DeleteFileArgs args;
     args.set_file_name(path);
 
-    CompletionQueue cq;
+    const bool deleteSuccess = QueryServers<Empty>(
+        QueryServers_(),
+        args,
+        &Filesys::Stub::PrepareAsyncDeleteFile,
+        numServers_ - numFaulty_ + numMalicious_,
+        100ms,
+        timeout_,
+        [&](const std::vector<AsyncResponse<Empty>> &responses,
+            const std::vector<uint8_t> &replied,
+            size_t &minimum_success) -> bool
+        {
+            return true;
+        },
+        "Delete"
+    );
 
-    std::vector<AsyncResponse<Empty>> responseBuffer(numServers_);
-    std::vector<ClientContext> contexts(numServers_);
-
-    for (size_t serverId = 0; serverId < numServers_; ++serverId) {
-        ClientContext &context = contexts[serverId];
-        const std::chrono::system_clock::time_point deadline =
-            std::chrono::system_clock::now() + timeout_;
-        context.set_deadline(deadline);
-        std::unique_ptr<ClientAsyncResponseReader<Empty>> responseHeader =
-            servers_[serverId]->PrepareAsyncDeleteFile(&context, args, &cq);
-
-        responseHeader->StartCall();
-        responseHeader->Finish(&responseBuffer[serverId].reply,
-                               &responseBuffer[serverId].status,
-                               (void *)serverId);
-    }
-
-    void *tag;
-    bool ok = false;
-    int successCount = 0;
-
-    while (cq.Next(&tag, &ok)) {
-        const size_t serverId = (size_t)tag;
-        const AsyncResponse<Empty> *reply = &responseBuffer[serverId];
-        if (reply->status.ok()) {
-            ++successCount;
-            spdlog::info("Delete {} success", path);
-            if (successCount >= numServers_ - numFaulty_ + numMalicious_) {
-                /* Sufficient servers successfully acknowledged. */
-                cq.Shutdown();
-                while (cq.Next(&tag, &ok));
-                return 0;
-            }
-        } else {
-            spdlog::warn(
-                "Delete {} failed ({}: {})", path,
-                static_cast<int>(
-                    reply->status.error_code()),  // fmt doesn't like enums
-                reply->status.error_message());
-        }
-    }
-
-    return -EIO;
+    return deleteSuccess ? 0 : -EIO;
 }
+
