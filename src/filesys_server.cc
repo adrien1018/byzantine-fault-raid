@@ -83,19 +83,15 @@ class FilesysImpl final : public Filesys::Service {
 
     Status ReadBlocks(ServerContext* context, const ReadBlocksArgs* args,
                       ReadBlocksReply* reply) override {
-        std::cerr << "ReadBlocks\n";
         std::string file_name = args->file_name();
         uint32_t version = args->has_version()
                                ? args->version()
                                : _data_storage.GetLatestVersion(file_name);
-        std::cerr << "Trying to read " << file_name << " at version " << version
-                  << '\n';
 
         for (auto& range : args->stripe_ranges()) {
             Bytes block_data = _data_storage.ReadFile(file_name, range.offset(),
                                                       range.count(), version);
             if (block_data.empty()) {
-                std::cerr << "Failed to read " << file_name << '\n';
                 return grpc::Status(grpc::StatusCode::NOT_FOUND,
                                     "Version does not exist or has expired.");
             }
@@ -103,7 +99,6 @@ class FilesysImpl final : public Filesys::Service {
                 std::string(block_data.begin(), block_data.end());
             *reply->add_block_data() = block_data_str;
         }
-        std::cerr << "Success\n";
         reply->set_version(version);
         return Status::OK;
     }
@@ -114,8 +109,6 @@ class FilesysImpl final : public Filesys::Service {
         std::string file_name = args->file_name();
         std::string block_data_str = args->block_data();
         Bytes block_data = Bytes(block_data_str.begin(), block_data_str.end());
-        std::cerr << "Trying to write " << file_name << " at version "
-                  << version << '\n';
 
         // spdlog::info("Server {} write {}", _server_idx, block_data);
 
@@ -126,11 +119,9 @@ class FilesysImpl final : public Filesys::Service {
         if (!_data_storage.WriteFile(file_name, args->stripe_range().offset(),
                                      args->stripe_range().count(), _server_idx,
                                      version, block_data, metadata)) {
-            std::cerr << "Write failed\n";
             return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
                                 "Invalid version.");
         }
-        std::cerr << "Write succeeded\n";
 
         return Status::OK;
     }
@@ -203,7 +194,8 @@ class FilesysImpl final : public Filesys::Service {
                         if (versions.size() > _config.num_malicious &&
                             _data_storage.GetLatestVersion(file_name) <
                                 target_version) {
-                            std::thread([this, file_name=file_name, target_version]() {
+                            std::thread([this, file_name = file_name,
+                                         target_version]() {
                                 // Wait for possible write to come.
                                 std::this_thread::sleep_for(15s);
                                 uint32_t current_version =

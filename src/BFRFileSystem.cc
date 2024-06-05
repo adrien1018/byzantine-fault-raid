@@ -53,8 +53,8 @@ static uint64_t roundUp(const uint64_t numToRound, const uint64_t multiple) {
 
 BFRFileSystem::BFRFileSystem(const std::vector<std::string> &serverAddresses,
                              const int numMalicious, const int numFaulty,
-                             const int blockSize, const std::string &signing_key_path)
-{
+                             const int blockSize,
+                             const std::string &signing_key_path) {
     for (const std::string &address : serverAddresses) {
         std::shared_ptr<Channel> channel =
             CreateChannel(address, InsecureChannelCredentials());
@@ -83,17 +83,12 @@ std::unordered_set<std::string> BFRFileSystem::getFileList() const {
     args.set_include_deleted(false);
 
     bool ret = QueryServers<GetFileListReply>(
-        QueryServers_(),
-        args,
-        &Filesys::Stub::PrepareAsyncGetFileList,
-        numServers_ - numFaulty_,
-        100ms,
-        timeout_,
+        QueryServers_(), args, &Filesys::Stub::PrepareAsyncGetFileList,
+        numServers_ - numFaulty_, 100ms, timeout_,
         [&](const std::vector<AsyncResponse<GetFileListReply>> &responses,
             const std::vector<uint8_t> &replied,
             size_t &minimum_success) -> bool {
-            for (size_t i = 0; i < responses.size(); ++i)
-            {
+            for (size_t i = 0; i < responses.size(); ++i) {
                 if (!replied[i] || !responses[i].status.ok()) continue;
                 auto &reply = responses[i].reply;
                 /*
@@ -114,8 +109,7 @@ std::unordered_set<std::string> BFRFileSystem::getFileList() const {
             }
             return true;
         },
-        "GetFileList"
-    );
+        "GetFileList");
 
     /*
      * Only consider filenames most common filenames
@@ -138,20 +132,12 @@ int BFRFileSystem::create(const char *path) const {
     args.set_public_key(std::string(publicKey.begin(), publicKey.end()));
 
     const bool createSuccess = QueryServers<Empty>(
-        QueryServers_(),
-        args,
-        &Filesys::Stub::PrepareAsyncCreateFile,
-        numServers_ - numFaulty_ + numMalicious_,
-        100ms,
-        timeout_,
+        QueryServers_(), args, &Filesys::Stub::PrepareAsyncCreateFile,
+        numServers_ - numFaulty_ + numMalicious_, 100ms, timeout_,
         [&](const std::vector<AsyncResponse<Empty>> &responses,
             const std::vector<uint8_t> &replied,
-            size_t &minimum_success) -> bool
-        {
-            return true;
-        },
-        "Create"
-    );
+            size_t &minimum_success) -> bool { return true; },
+        "Create");
 
     return createSuccess ? 0 : -EIO;
 }
@@ -165,25 +151,17 @@ std::optional<FileMetadata> BFRFileSystem::open(const char *path) const {
     std::unordered_map<FileMetadata, int> metadataCounts;
 
     bool ret = QueryServers<GetFileListReply>(
-        QueryServers_(),
-        args,
-        &Filesys::Stub::PrepareAsyncGetFileList,
-        numServers_ - numFaulty_,
-        100ms,
-        timeout_,
+        QueryServers_(), args, &Filesys::Stub::PrepareAsyncGetFileList,
+        numServers_ - numFaulty_, 100ms, timeout_,
         [&](const std::vector<AsyncResponse<GetFileListReply>> &responses,
             const std::vector<uint8_t> &replied,
-            size_t &minimum_success) -> bool
-        {
-            for (size_t i = 0; i < responses.size(); ++i)
-            {
-                if (!replied[i] || !responses[i].status.ok())
-                {
+            size_t &minimum_success) -> bool {
+            for (size_t i = 0; i < responses.size(); ++i) {
+                if (!replied[i] || !responses[i].status.ok()) {
                     continue;
                 }
                 auto &reply = responses[i].reply;
-                if (!reply.files().size())
-                {
+                if (!reply.files().size()) {
                     continue;
                 }
                 const FileMetadata m = {
@@ -193,11 +171,9 @@ std::optional<FileMetadata> BFRFileSystem::open(const char *path) const {
             }
             return true;
         },
-        "Open"
-    );
+        "Open");
 
-    if (metadataCounts.empty())
-    {
+    if (metadataCounts.empty()) {
         return std::nullopt;
     }
 
@@ -410,7 +386,6 @@ int64_t BFRFileSystem::write(const char *path, const char *buf,
     std::vector<ClientContext> contexts(numServers_);
 
     for (size_t serverId = 0; serverId < numServers_; ++serverId) {
-        std::cerr << "Talking to server " << serverId << std::endl;
         ClientContext &context = contexts[serverId];
         const std::chrono::system_clock::time_point deadline =
             std::chrono::system_clock::now() + timeout_;
@@ -423,8 +398,6 @@ int64_t BFRFileSystem::write(const char *path, const char *buf,
 
         filesys::StripeRange *range = args.mutable_stripe_range();
         args.set_file_name(path);
-        std::cerr << "Writing " << startStripeId << ' ' << numStripes << ' '
-                  << newVersion << '\n';
         range->set_offset(startStripeId);
         range->set_count(numStripes);
         args.set_version(newVersion);
@@ -434,31 +407,23 @@ int64_t BFRFileSystem::write(const char *path, const char *buf,
                                       block.end());
         }
         // spdlog::debug("Write {}, {}", serverId, concatenatedBlocks);
-        std::cerr << "size is " << concatenatedBlocks.size() << '\n';
         args.set_block_data(
             std::string(concatenatedBlocks.begin(), concatenatedBlocks.end()));
-        std::cerr << "Preparing call" << std::endl;
         std::unique_ptr<ClientAsyncResponseReader<Empty>> responseHeader =
             servers_[serverId]->PrepareAsyncWriteBlocks(&context, args, &cq);
-        std::cerr << "Starting call" << std::endl;
         responseHeader->StartCall();
-        std::cerr << "Finishing call" << std::endl;
         responseHeader->Finish(&responseBuffer[serverId].reply,
                                &responseBuffer[serverId].status,
                                (void *)serverId);
-        std::cerr << "ending call" << std::endl;
     }
 
     void *tag;
     bool ok = false;
     int successCount = 0;
 
-    std::cerr << "Waiting for responses" << std::endl;
     while (cq.Next(&tag, &ok)) {
         ++successCount;
         size_t serverId = (size_t)tag;
-        std::cerr << "Got response from server " << serverId << ' ' << ok
-                  << std::endl;
         if (responseBuffer[serverId].status.ok()) {
             std::cerr << "ok\n";
         } else {
@@ -485,21 +450,12 @@ int BFRFileSystem::unlink(const char *path) const {
     args.set_file_name(path);
 
     const bool deleteSuccess = QueryServers<Empty>(
-        QueryServers_(),
-        args,
-        &Filesys::Stub::PrepareAsyncDeleteFile,
-        numServers_ - numFaulty_ + numMalicious_,
-        100ms,
-        timeout_,
+        QueryServers_(), args, &Filesys::Stub::PrepareAsyncDeleteFile,
+        numServers_ - numFaulty_ + numMalicious_, 100ms, timeout_,
         [&](const std::vector<AsyncResponse<Empty>> &responses,
             const std::vector<uint8_t> &replied,
-            size_t &minimum_success) -> bool
-        {
-            return true;
-        },
-        "Delete"
-    );
+            size_t &minimum_success) -> bool { return true; },
+        "Delete");
 
     return deleteSuccess ? 0 : -EIO;
 }
-

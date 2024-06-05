@@ -155,14 +155,11 @@ void File::WriteMetadata() {
 bool File::WriteStripes(uint64_t stripe_offset, uint64_t num_stripes,
                         uint32_t block_idx, uint32_t version,
                         const Bytes& block_data, const Metadata& metadata) {
-    std::cerr << stripe_offset << ' ' << num_stripes << ' ' << block_idx << ' '
-              << version << ' ' << block_data.size() << '\n';
     for (uint64_t i = 0; i < num_stripes; i++) {
         const Bytes block = Bytes(block_data.begin() + i * _block_size,
                                   block_data.begin() + (i + 1) * _block_size);
         if (!VerifyBlock(block, block_idx, _public_key, _file_name,
                          stripe_offset + i, version)) {
-            std::cerr << "Failed to verify block" << std::endl;
             return false;
         }
     }
@@ -172,7 +169,6 @@ bool File::WriteStripes(uint64_t stripe_offset, uint64_t num_stripes,
         /* Stale write. */
         return true;
     } else if (version != _version + 1) {
-        std::cerr << "Version gap" << std::endl;
         /* Version gap. */
         return false;
     }
@@ -193,15 +189,10 @@ Bytes File::ReadVersion(uint32_t version, uint64_t stripe_offset,
                         uint64_t num_stripes) {
     std::lock_guard<std::mutex> lock(_mu);
 
-    std::cerr << "Read version " << version << ' ' << stripe_offset << ' '
-              << num_stripes << std::endl;
-
     if (_deleted) {
         return {};
     }
     std::set<Segment> segments = ReconstructVersion(version);
-    std::cerr << "Segments done " << segments.size() << std::endl;
-    std::cerr << segments.size() << std::endl;
     if (segments.empty()) {
         return {};
     }
@@ -273,7 +264,6 @@ bool File::UpdateSignKey(const Bytes& public_key) {
     _deleted = false;
     _public_key = SigningKey(public_key, false);
     WriteMetadata();
-    std::cerr << "Stripe size after: " << GetCurrentStripeSize() << '\n';
     return true;
 }
 
@@ -363,32 +353,25 @@ void File::GarbageCollectRecord() {
 
 uint64_t File::GetCurrentStripeSize() {
     _file_stream.seekg(0, std::ios::end);
-    std::cerr << _file_stream.tellg() << ' ' << _base_position << '\n';
     return static_cast<uint64_t>(_file_stream.tellg()) - _base_position;
 }
 
 std::set<Segment> File::ReconstructVersion(uint32_t version) {
     if (version > _version) {
         /* The version is higher than the current version. */
-        std::cerr << "Return due to version\n";
         return {};
     }
     if (version != _version &&
         (_update_record.empty() || _first_image_version > version)) {
         /* Not enough information to recover the old version. */
-        std::cerr << "No info\n";
         return {};
     }
     auto latest_update = _update_record.rbegin();
-    std::cerr << "Getting stripe size\n";
     uint64_t file_size = GetCurrentStripeSize();
-    std::cerr << "Stripe size: " << file_size << '\n';
     if (file_size % _block_size) {
         throw std::runtime_error("File size not on block boundary");
     }
     std::set<Segment> segments{{0, file_size / _block_size, _version}};
-    std::cerr << "Segment now contains " << file_size / _block_size << '\n';
-    std::cerr << "Update record size: " << _update_record.size() << '\n';
     uint64_t version_block_size = file_size / _block_size;
     while (latest_update != _update_record.rend() &&
            latest_update->second.version >= version) {
@@ -432,7 +415,6 @@ std::set<Segment> File::ReconstructVersion(uint32_t version) {
                          latest_update->second.version);
         latest_update = std::next(latest_update);
     }
-    std::cerr << "Out of while loop\n";
 
     auto unused_segment = segments.lower_bound({version_block_size, 0, 0});
     if (unused_segment != segments.begin()) {
@@ -446,11 +428,9 @@ std::set<Segment> File::ReconstructVersion(uint32_t version) {
         }
     }
 
-    std::cerr << "Erasing unused\n";
     while (unused_segment != segments.end()) {
         unused_segment = segments.erase(unused_segment);
     }
-    std::cerr << "Done\n";
 
     return segments;
 }
