@@ -1,6 +1,7 @@
 #include "data_storage.h"
 
 #include <algorithm>
+#include <iostream>
 
 DataStorage::DataStorage(const fs::path& storage_directory, uint32_t block_size)
     : _storage_directory(storage_directory), _block_size(block_size) {
@@ -42,6 +43,7 @@ bool DataStorage::WriteFile(const std::string& file_name,
                             const Bytes& block_data, const Metadata& metadata) {
     std::unique_lock<std::mutex> lock(_mu);
     if (_file_list.find(file_name) == _file_list.end()) {
+        std::cerr << "File not found: " << file_name << std::endl;
         return false;
     }
 
@@ -56,7 +58,8 @@ Bytes DataStorage::ReadFile(const std::string& file_name,
                             uint32_t version) {
     std::unique_lock<std::mutex> lock(_mu);
     if (_file_list.find(file_name) == _file_list.end()) {
-        return Bytes{};
+        std::cerr << "File not found\n";
+        return {};
     }
 
     auto file = _file_list[file_name];
@@ -82,8 +85,9 @@ std::vector<std::shared_ptr<File>> DataStorage::GetFileList(
         file_list.resize(_file_list.size());
         std::transform(_file_list.begin(), _file_list.end(), file_list.begin(),
                        [](const auto& pair) { return pair.second; });
-    } else {
-        file_list.emplace_back(_file_list[file_name]);
+    } else if (auto entry = _file_list.find(file_name);
+               entry != _file_list.end()) {
+        file_list.emplace_back(entry->second);
     }
     return file_list;
 }

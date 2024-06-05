@@ -4,6 +4,7 @@
 #include <grpcpp/server.h>
 #include <grpcpp/server_builder.h>
 #include <grpcpp/server_context.h>
+#include <spdlog/fmt/ranges.h>
 
 #include <CLI/CLI.hpp>
 #include <algorithm>
@@ -37,6 +38,8 @@ using grpc::ServerBuilder;
 using grpc::ServerContext;
 using grpc::ServerWriter;
 using grpc::Status;
+
+#include <iostream>
 
 namespace fs = std::filesystem;
 
@@ -74,21 +77,25 @@ class FilesysImpl final : public Filesys::Service {
             return Status::OK;
         } else {
             return grpc::Status(grpc::StatusCode::ALREADY_EXISTS,
-                                "File already existed.");
+                                "File already exists");
         }
     }
 
     Status ReadBlocks(ServerContext* context, const ReadBlocksArgs* args,
                       ReadBlocksReply* reply) override {
+        std::cerr << "ReadBlocks\n";
         std::string file_name = args->file_name();
         uint32_t version = args->has_version()
                                ? args->version()
                                : _data_storage.GetLatestVersion(file_name);
+        std::cerr << "Trying to read " << file_name << " at version " << version
+                  << '\n';
 
         for (auto& range : args->stripe_ranges()) {
-            Bytes block_data = _data_storage.ReadFile(
-                file_name, range.offset(), range.count(), version);
+            Bytes block_data = _data_storage.ReadFile(file_name, range.offset(),
+                                                      range.count(), version);
             if (block_data.empty()) {
+                std::cerr << "Failed to read " << file_name << '\n';
                 return grpc::Status(grpc::StatusCode::NOT_FOUND,
                                     "Version does not exist or has expired.");
             }
@@ -96,6 +103,7 @@ class FilesysImpl final : public Filesys::Service {
                 std::string(block_data.begin(), block_data.end());
             *reply->add_block_data() = block_data_str;
         }
+        std::cerr << "Success\n";
         reply->set_version(version);
         return Status::OK;
     }
@@ -106,17 +114,23 @@ class FilesysImpl final : public Filesys::Service {
         std::string file_name = args->file_name();
         std::string block_data_str = args->block_data();
         Bytes block_data = Bytes(block_data_str.begin(), block_data_str.end());
+        std::cerr << "Trying to write " << file_name << " at version "
+                  << version << '\n';
+
+        // spdlog::info("Server {} write {}", _server_idx, block_data);
 
         const std::string public_key_str = args->metadata().public_key();
         Bytes public_key = Bytes(public_key_str.begin(), public_key_str.end());
         Metadata metadata{.public_key = public_key,
                           .file_size = args->metadata().file_size()};
         if (!_data_storage.WriteFile(file_name, args->stripe_range().offset(),
-                                     args->stripe_range().count(), _server_idx, version,
-                                     block_data, metadata)) {
+                                     args->stripe_range().count(), _server_idx,
+                                     version, block_data, metadata)) {
+            std::cerr << "Write failed\n";
             return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
                                 "Invalid version.");
         }
+        std::cerr << "Write succeeded\n";
 
         return Status::OK;
     }
@@ -136,6 +150,7 @@ class FilesysImpl final : public Filesys::Service {
                 std::string public_key_str = std::string(
                     public_key_bytes.begin(), public_key_bytes.end());
                 file_info->mutable_metadata()->set_public_key(public_key_str);
+                file_info->mutable_metadata()->set_file_size(file->FileSize());
             }
         }
         return Status::OK;
@@ -162,8 +177,10 @@ class FilesysImpl final : public Filesys::Service {
             QueryServers<GetFileListReply>(
                 _peers, args, &Filesys::Stub::PrepareAsyncGetFileList,
                 2 * _config.num_malicious + 1, 1s, 10s,
-                [&](const std::vector<AsyncResponse<GetFileListReply>>& responses,
-                    const std::vector<uint8_t>& replied, size_t& minimum_success) -> bool {
+                [&](const std::vector<AsyncResponse<GetFileListReply>>&
+                        responses,
+                    const std::vector<uint8_t>& replied,
+                    size_t& minimum_success) -> bool {
                     std::unordered_map<std::string, std::vector<uint32_t>>
                         file_versions;
                     for (uint32_t i = 0; i < replied.size(); i++) {
@@ -180,28 +197,33 @@ class FilesysImpl final : public Filesys::Service {
                     for (auto& [file_name, versions] : file_versions) {
                         if (versions.size() <= _config.num_malicious) continue;
                         std::sort(versions.begin(), versions.end());
-                        uint32_t offset = versions.size() - _config.num_malicious - 1;
+                        uint32_t offset =
+                            versions.size() - _config.num_malicious - 1;
                         uint32_t target_version = versions[offset];
                         if (versions.size() > _config.num_malicious &&
-                            _data_storage.GetLatestVersion(file_name) < target_version) {
-                            std::thread(
-                                [this,file_name,target_version]() {
-                                    // Wait for possible write to come.
-                                    std::this_thread::sleep_for(15s);
-                                    uint32_t current_version = _data_storage.GetLatestVersion(file_name);
-                                    if (current_version < target_version) {
-                                        Recovery(file_name, current_version, target_version);
-                                    }
-                                }).detach();
+                            _data_storage.GetLatestVersion(file_name) <
+                                target_version) {
+                            std::thread([this, file_name=file_name, target_version]() {
+                                // Wait for possible write to come.
+                                std::this_thread::sleep_for(15s);
+                                uint32_t current_version =
+                                    _data_storage.GetLatestVersion(file_name);
+                                if (current_version < target_version) {
+                                    Recovery(file_name, current_version,
+                                             target_version);
+                                }
+                            }).detach();
                         }
                     }
                     return true;
-                }, "GetFileList");
+                },
+                "GetFileList");
             std::this_thread::sleep_for(10s);
         }
     }
 
-    void Recovery(const std::string& file_name, uint32_t current_version, uint32_t target_version) {
+    void Recovery(const std::string& file_name, uint32_t current_version,
+                  uint32_t target_version) {
         GetUpdateLogArgs args;
         args.set_file_name(file_name);
         args.set_after_version(current_version);
@@ -210,12 +232,15 @@ class FilesysImpl final : public Filesys::Service {
             QueryServers<GetUpdateLogReply>(
                 _peers, args, &Filesys::Stub::PrepareAsyncGetUpdateLog,
                 2 * _config.num_malicious + 1, 1s, 5s,
-                [&](const std::vector<AsyncResponse<GetUpdateLogReply>>& responses,
-                    const std::vector<uint8_t>& replied, size_t& minimum_success) -> bool {
+                [&](const std::vector<AsyncResponse<GetUpdateLogReply>>&
+                        responses,
+                    const std::vector<uint8_t>& replied,
+                    size_t& minimum_success) -> bool {
                     // TODO: Finish after finalizing update log format
                     // update target_version if needed
                     return true;
-                }, "GetUpdateLog");
+                },
+                "GetUpdateLog");
             // TODO: merge segments
             // TODO: read file for each segment; continue if fail
             break;
@@ -242,6 +267,9 @@ static void RunServer(const std::string& ip_address, uint32_t server_idx,
 }
 
 int main(int argc, char* argv[]) {
+    spdlog::set_pattern("[%t] %+");
+    spdlog::set_level(spdlog::level::debug);
+
     /* Parse command line arguments. */
     CLI::App filesys;
 

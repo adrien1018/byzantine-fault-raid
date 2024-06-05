@@ -2,3 +2,5 @@ servers = ["172.17.0.2:8080"]
 num_malicious = 0
 num_faulty = 0
 block_size = 128
+fuse_mount_point = "test"
+signing_key = "signing_key"

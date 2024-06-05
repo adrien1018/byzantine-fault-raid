@@ -14,6 +14,22 @@ using Bytes = std::vector<uint8_t>;
 namespace fs = std::filesystem;
 
 SigningKey::SigningKey() : key_pair_(nullptr, EVP_PKEY_free), private_key_(true) {
+    this->createNewKey();
+}
+
+SigningKey::SigningKey(const fs::path& key_path, bool is_private_key) :
+  key_pair_(nullptr, EVP_PKEY_free), private_key_(is_private_key) {
+  FILE* fp = fopen(key_path.c_str(), "r");
+  if (fp) {
+    this->importKey(fp, is_private_key);
+  } else {
+    this->createNewKey();
+    this->ExportPrivateKey(key_path);
+  }
+  fclose(fp);
+}
+
+void SigningKey::createNewKey() {
   EVP_PKEY* pkey = nullptr;
   EVP_PKEY_CTX* pctx = EVP_PKEY_CTX_new_id(EVP_PKEY_ED25519, nullptr);
   EVP_PKEY_keygen_init(pctx);
@@ -23,16 +39,13 @@ SigningKey::SigningKey() : key_pair_(nullptr, EVP_PKEY_free), private_key_(true)
   key_pair_.reset(pkey);
 }
 
-SigningKey::SigningKey(const fs::path& key_path, bool is_private_key) :
-    key_pair_(nullptr, EVP_PKEY_free), private_key_(is_private_key) {
+void SigningKey::importKey(FILE *fp, bool is_private_key) {
   EVP_PKEY* pkey = nullptr;
-  FILE* fp = fopen(key_path.c_str(), "r");
   if (is_private_key) {
     PEM_read_PrivateKey(fp, &pkey, nullptr, nullptr);
   } else {
     PEM_read_PUBKEY(fp, &pkey, nullptr, nullptr);
   }
-  fclose(fp);
   if (!pkey) throw std::runtime_error("Failed to read key");
   key_pair_.reset(pkey);
 }

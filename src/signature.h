@@ -13,6 +13,8 @@ namespace fs = std::filesystem;
 
 class SigningKey {
    private:
+    void createNewKey();
+    void importKey(FILE *fp, bool is_private_key);
     EVP_PKEY_ptr key_pair_;
     bool private_key_;
 

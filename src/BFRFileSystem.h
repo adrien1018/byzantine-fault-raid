@@ -4,12 +4,12 @@
 
 #pragma once
 
+#include <memory>
 #include <string>
 #include <vector>
-#include <memory>
 
-#include "signature.h"
 #include "filesys.grpc.pb.h"
+#include "signature.h"
 
 using filesys::Filesys;
 
@@ -18,8 +18,7 @@ typedef struct FileMetadata {
     uint64_t fileSize;
 
     /* For unordered_map. */
-    bool operator ==(const FileMetadata &other) const
-    {
+    bool operator==(const FileMetadata &other) const {
         return (this->version == other.version) &&
                (this->fileSize == other.fileSize);
     }
@@ -27,23 +26,22 @@ typedef struct FileMetadata {
 } FileMetadata;
 
 /* How to hash FileMetadata for unordered_map. */
-template<> struct std::hash<FileMetadata>
-{
-    std::size_t operator()(const FileMetadata &m) const
-    {
+template <>
+struct std::hash<FileMetadata> {
+    std::size_t operator()(const FileMetadata &m) const {
         return std::hash<uint32_t>()(m.version) ^
                std::hash<uint64_t>()(m.fileSize);
     }
 };
 
 class BFRFileSystem final {
-public:
+   public:
     /*
      * Initializes connections to servers; loads signing key.
      */
     BFRFileSystem(const std::vector<std::string> &serverAddresses,
                   const int numMalicious, const int numFaulty,
-                  const int blockSize);
+                  const int blockSize, const std::string &signing_key_path);
 
     /*
      * Returns the list of files.
@@ -83,7 +81,7 @@ public:
      */
     int unlink(const char *path) const;
 
-private:
+   private:
     std::vector<std::unique_ptr<Filesys::Stub>> servers_;
     int numServers_;
     int numMalicious_;
@@ -93,6 +91,5 @@ private:
     SigningKey signingKey_;
     std::chrono::microseconds timeout_;
 
-    std::vector<Filesys::Stub*> QueryServers_() const;
+    std::vector<Filesys::Stub *> QueryServers_() const;
 };
-
