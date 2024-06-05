@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.11)
 
-set(CMAKE_CXX_COMPILER "g++-14")
+if(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
+  set(CMAKE_CXX_COMPILER "g++-14")
+endif()
 set(CMAKE_CXX_STANDARD "17")
 
 project(Filesys C CXX)
@@ -46,9 +48,9 @@ find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
 
 if (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
-    pkg_search_module(FUSE REQUIRED fuse)
+  pkg_search_module(FUSE REQUIRED fuse)
 else()
-    pkg_search_module(FUSE REQUIRED fuse3)
+  pkg_search_module(FUSE REQUIRED fuse3)
 endif()
 
 # Proto file
@@ -101,7 +103,6 @@ target_link_libraries(BFRFileSystem ${COMMON_LIBRARIES})
 add_executable(filesys_server "${CMAKE_SOURCE_DIR}/src/filesys_server.cc")
 add_executable(filesys_client "${CMAKE_SOURCE_DIR}/src/filesys_client.cc" "${CMAKE_SOURCE_DIR}/src/BFRFileSystem.cc")
 target_link_libraries(filesys_server ${COMMON_LIBRARIES})
-
 target_link_libraries(filesys_client ${COMMON_LIBRARIES} ${FUSE_LIBRARIES})
 
 if (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
