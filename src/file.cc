@@ -62,10 +62,10 @@ File::File(const std::string& directory, const std::string& file_name,
       _public_key(public_key, false),
       _version(0),
       _first_image_version(0),
-      _garbage_collection(&File::GarbageCollectRecord, this),
       _file_closed(false),
       _file_size(0),
       _deleted(false),
+      _garbage_collection(&File::GarbageCollectRecord, this),
       _block_size(_block_size) {
     fs::path file_path = _directory / _file_name;
     std::fstream::openmode open_mode = std::fstream::binary | std::fstream::in |
@@ -76,6 +76,7 @@ File::File(const std::string& directory, const std::string& file_name,
         throw std::runtime_error("Failed to open fail");
     }
 
+    WriteMetadata();
     fs::path log_directory = _directory / fs::path(file_name + "_log");
     fs::create_directory(log_directory);
 }
@@ -84,11 +85,12 @@ File::File(const std::string& directory, const std::string& file_name,
            uint32_t block_size)
     : _directory(directory),
       _file_name(file_name),
+      _version(0),
       _first_image_version(0),
-      _garbage_collection(&File::GarbageCollectRecord, this),
       _file_closed(false),
       _file_size(0),
       _deleted(false),
+      _garbage_collection(&File::GarbageCollectRecord, this),
       _block_size(block_size) {
     fs::path file_path = _directory / _file_name;
     std::fstream::openmode open_mode =
@@ -324,6 +326,9 @@ UndoRecord File::CreateUndoRecord(uint64_t stripe_offset,
                 .file_size = _file_size,
             },
     };
+
+    record.WriteToFile(ofs);
+    ofs.close();
 
     return record;
 }
