@@ -35,8 +35,11 @@ bool WaitResponses(size_t N, grpc::CompletionQueue& cq,
                 "{}: Got response from server {}, ok={}, num_success={}",
                 log_tag, i, response_buffer[i].status.ok(), num_success);
         }
-        if (num_received - num_success > N - minimum_success)
+        if (num_received - num_success > N - minimum_success) {
+            cq.Shutdown();
+            while (cq.Next(&idx, &ok));
             break; /* Too many failures. */
+        }
         if (num_success >= minimum_success) {
             auto deadline = std::chrono::system_clock::now() + additional_wait;
             while (cq.AsyncNext(&idx, &ok, deadline) ==

@@ -39,7 +39,7 @@ static int bfr_getattr(const char *path, struct stat *stbuf)
         return 0;
     }
 
-    const char *bfrPath = path + 1; // Remove preceding '/'
+    const char *bfrPath = path + 1;  // Remove preceding '/'
     spdlog::info("FUSE getattr: {}", bfrPath);
     const std::optional<FileMetadata> metadata = bfrFs->open(bfrPath);
     if (metadata.has_value()) {
@@ -55,7 +55,7 @@ static int bfr_getattr(const char *path, struct stat *stbuf)
 }
 
 static int bfr_open(const char *path, struct fuse_file_info *info) {
-    const char *bfrPath = path + 1; // Remove preceding '/'
+    const char *bfrPath = path + 1;  // Remove preceding '/'
     spdlog::info("FUSE open: {}", bfrPath);
     const std::optional<FileMetadata> metadata = bfrFs->open(bfrPath);
     if (metadata.has_value()) {
@@ -125,23 +125,21 @@ static void bfr_destroy(void *private_data) {
 }
 
 static int bfr_create(const char *path, mode_t mode,
-                       struct fuse_file_info *info)
-{
-    const char *bfrPath = path + 1; // Remove preceding '/'
+                      struct fuse_file_info *info) {
+    const char *bfrPath = path + 1;  // Remove preceding '/'
     spdlog::info("FUSE create: {}", bfrPath);
     return bfrFs->create(bfrPath);
 }
 
 static struct fuse_operations bfr_filesystem_operations = {
     .getattr = bfr_getattr,
-    .unlink  = bfr_unlink,
-    .open    = bfr_open,
-    .read    = bfr_read,
-    .write   = bfr_write,
+    .unlink = bfr_unlink,
+    .open = bfr_open,
+    .read = bfr_read,
+    .write = bfr_write,
     .readdir = bfr_readdir,
     .destroy = bfr_destroy,
-    .create  = bfr_create
-};
+    .create = bfr_create};
 
 int main(int argc, char **argv) {
     CLI::App app;
@@ -149,6 +147,13 @@ int main(int argc, char **argv) {
 
     int index;
     app.add_option("-i,--index", index)->required();
+    std::string signing_key;
+    app.add_option("-k,--key", signing_key, "Absolute or relative path")
+        ->required();
+    std::string fuse_mount_point; /* Absolute or relative path */
+    app.add_option("-m,--mount_point", fuse_mount_point,
+                   "Absolute or relative path")
+        ->required();
 
     CLI11_PARSE(app, argc, argv);
 
@@ -161,10 +166,9 @@ int main(int argc, char **argv) {
     spdlog::set_level(spdlog::level::debug);
 
     /* Initialize BFR-fs connection. */
-    bfrFs =
-        std::make_unique<BFRFileSystem>(config.servers, config.num_malicious,
-                                        config.num_faulty, config.block_size,
-                                        config.signing_key);
+    bfrFs = std::make_unique<BFRFileSystem>(
+        config.servers, config.num_malicious, config.num_faulty,
+        config.block_size, signing_key);
 
     std::vector<std::string> files{"a.txt", "b.txt", "c.txt"};
 
@@ -220,8 +224,8 @@ int main(int argc, char **argv) {
 
     /*
     const int fuse_argc = 3;
-    char *fuse_argv[] = {argv[0], (char *) config.fuse_mount_point.c_str(), "-f"};
-    return fuse_main(fuse_argc, fuse_argv, &bfr_filesystem_operations, NULL);
+    char *fuse_argv[] = {argv[0], (char *) fuse_mount_point.c_str(),
+    "-f"}; return fuse_main(fuse_argc, fuse_argv, &bfr_filesystem_operations,
+    NULL);
     */
 }
-

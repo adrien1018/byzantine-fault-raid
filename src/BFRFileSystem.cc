@@ -420,22 +420,30 @@ int64_t BFRFileSystem::write(const char *path, const char *buf,
     void *tag;
     bool ok = false;
     int successCount = 0;
+    int receiveCount = 0;
 
     while (cq.Next(&tag, &ok)) {
-        ++successCount;
+        ++receiveCount;
         size_t serverId = (size_t)tag;
         if (responseBuffer[serverId].status.ok()) {
-            std::cerr << "ok\n";
+            spdlog::info("WriteBlocks success");
+            successCount++;
         } else {
             spdlog::warn("WriteBlocks FAILED");
         }
 
-        spdlog::info("WriteBlocks success");
         if (successCount >= numServers_ - numFaulty_ + numMalicious_) {
             /* Sufficient servers successfully acknowledged. */
             cq.Shutdown();
             while (cq.Next(&tag, &ok));
             return size;
+        }
+
+        if (receiveCount - successCount > numFaulty_ - numMalicious_) {
+            /* Too many servers failed. */
+            cq.Shutdown();
+            while (cq.Next(&tag, &ok));
+            return -EIO;
         }
     }
 
