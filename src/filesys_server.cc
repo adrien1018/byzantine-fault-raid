@@ -84,9 +84,8 @@ class FilesysImpl final : public Filesys::Service {
     Status CreateFile(ServerContext* context, const CreateFileArgs* args,
                       google::protobuf::Empty* _) override {
         std::string file_name = args->file_name();
-        std::string public_key = args->public_key();
         if (_data_storage.CreateFile(
-                file_name, Bytes(public_key.begin(), public_key.end()))) {
+                args->file_name(), args->version(), StrToBytes(args->version_signature()))) {
             return Status::OK;
         } else {
             return grpc::Status(grpc::StatusCode::ALREADY_EXISTS,

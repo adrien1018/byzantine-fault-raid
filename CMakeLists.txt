@@ -79,7 +79,11 @@ include_directories(${FUSE_INCLUDE_DIRS})
 link_directories(${FUSE_LIBRARY_DIRS})
 
 file(GLOB filesys_src CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/*.cc")
-list(REMOVE_ITEM filesys_src "${CMAKE_SOURCE_DIR}/src/filesys_server.cc" "${CMAKE_SOURCE_DIR}/src/filesys_client.cc" "${CMAKE_SOURCE_DIR}/src/data_storage_test.cc" "${CMAKE_SOURCE_DIR}/src/BFRFileSystem.cc")
+list(REMOVE_ITEM filesys_src
+    "${CMAKE_SOURCE_DIR}/src/filesys_server.cc"
+    "${CMAKE_SOURCE_DIR}/src/filesys_client.cc"
+    "${CMAKE_SOURCE_DIR}/src/data_storage_test.cc"
+    "${CMAKE_SOURCE_DIR}/src/BFRFileSystem.cc")
 
 add_library(filesys_helper "${filesys_src}")
 target_link_libraries(filesys_helper crypto tomlplusplus::tomlplusplus spdlog::spdlog)
@@ -112,11 +116,22 @@ else()
 endif()
 
 # Test executables
-file(GLOB ENCODE_SRC_FILES ${PROJECT_SOURCE_DIR}/src/encode* ${PROJECT_SOURCE_DIR}/src/signature* ${PROJECT_SOURCE_DIR}/src/reed*)
+file(GLOB ENCODE_SRC_FILES
+    ${PROJECT_SOURCE_DIR}/src/bytes.*
+    ${PROJECT_SOURCE_DIR}/src/encode_decode.*
+    ${PROJECT_SOURCE_DIR}/src/signature.*
+    ${PROJECT_SOURCE_DIR}/src/reed_solomon.*
+    ${PROJECT_SOURCE_DIR}/src/encode_test.cc)
 add_executable(encode_test ${ENCODE_SRC_FILES})
 target_link_libraries(encode_test crypto)
 
-file(GLOB STORAGE_SRC_FILES ${PROJECT_SOURCE_DIR}/src/data_storage* ${PROJECT_SOURCE_DIR}/src/file.cc
-${PROJECT_SOURCE_DIR}/src/signature.cc ${PROJECT_SOURCE_DIR}/src/encode_decode.cc ${PROJECT_SOURCE_DIR}/src/reed*)
+file(GLOB STORAGE_SRC_FILES
+    ${PROJECT_SOURCE_DIR}/src/bytes.*
+    ${PROJECT_SOURCE_DIR}/src/data_storage.*
+    ${PROJECT_SOURCE_DIR}/src/file.*
+    ${PROJECT_SOURCE_DIR}/src/signature.*
+    ${PROJECT_SOURCE_DIR}/src/encode_decode.*
+    ${PROJECT_SOURCE_DIR}/src/reed_solomon.*
+    ${PROJECT_SOURCE_DIR}/src/data_storage_test.cc)
 add_executable(storage_test ${STORAGE_SRC_FILES})
 target_link_libraries(storage_test crypto spdlog::spdlog)

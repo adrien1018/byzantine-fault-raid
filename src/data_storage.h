@@ -16,7 +16,7 @@ class DataStorage {
    public:
     explicit DataStorage(const fs::path& storage_directory,
                          uint32_t block_size);
-    bool CreateFile(const std::string& file_name, const Bytes& public_key);
+    bool CreateFile(const std::string& file_name, uint32_t version, const Bytes& signature);
     bool WriteFile(const std::string& file_name, const UpdateMetadata& metadata,
                    uint32_t block_idx, const Bytes& block_data);
     Bytes ReadFile(const std::string& file_name, uint64_t stripe_offset,

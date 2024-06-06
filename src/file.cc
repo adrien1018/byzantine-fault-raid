@@ -61,26 +61,36 @@ void UndoRecord::WriteToFile(std::ofstream& ofs) const {
 const uint64_t File::kBasePosition = 4 + 32;
 
 File::File(const std::string& directory, const std::string& file_name,
-           const Bytes& public_key, uint32_t _block_size)
+           const Bytes& version_signature, uint32_t _block_size)
     : _directory(directory),
       _file_name(file_name),
-      _public_key(public_key, false),
+      _encoded_file_name(PathEncode(file_name)),
+      _public_key(GetPublicKeyFromPath(file_name), false),
       _start_version(0),
       _first_image_version(0),
       _file_closed(false),
       _garbage_collection(&File::GarbageCollectRecord, this),
       _block_size(_block_size) {
-    fs::path file_path = _directory / _file_name;
+#ifndef NO_VERIFY
+    if (!VerifyUpdate(version_signature, _public_key, _file_name, 0, 0, 0, false)) {
+        spdlog::warn("Version signature verification failed");
+        throw std::runtime_error("Version signature verification failed");
+    }
+#endif
+    {
+        std::error_code ec;
+        fs::create_directory(_directory / "files", ec);
+        fs::create_directories(UndoLogDirectory());
+    }
+    fs::path file_path = _directory / "files" / _encoded_file_name;
     std::fstream::openmode open_mode = std::fstream::binary | std::fstream::in |
                                        std::fstream::out | std::fstream::trunc;
 
     _file_stream.open(file_path, open_mode);
-    if (_file_stream.fail()) {
-        throw std::runtime_error("Failed to open fail");
+    if (!_file_stream.is_open()) {
+        spdlog::error("Failed to open file");
+        throw std::runtime_error("Failed to open file");
     }
-
-    fs::path log_directory = _directory / fs::path(file_name + "_log");
-    fs::create_directory(log_directory);
 
     UpdateMetadata meta = {
         .version = 0,
@@ -88,7 +98,7 @@ File::File(const std::string& directory, const std::string& file_name,
         .num_stripes = 0,
         .file_size = 0,
         .is_delete = false,
-        .signature = Bytes(SigningKey::kSignatureSize), // TODO: Add signature
+        .signature = version_signature,
     };
     _update_record[-1] = CreateUndoRecord(meta);
 
@@ -99,12 +109,13 @@ File::File(const std::string& directory, const std::string& file_name,
            uint32_t block_size)
     : _directory(directory),
       _file_name(file_name),
+      _encoded_file_name(PathEncode(file_name)),
       _start_version(0),
       _first_image_version(0),
       _file_closed(false),
       _garbage_collection(&File::GarbageCollectRecord, this),
       _block_size(block_size) {
-    fs::path file_path = _directory / _file_name;
+    fs::path file_path = _directory / "files" / _encoded_file_name;
     std::fstream::openmode open_mode =
         std::fstream::binary | std::fstream::in | std::fstream::out;
     _file_stream.open(file_path, open_mode);
@@ -118,7 +129,7 @@ File::File(const std::string& directory, const std::string& file_name,
         throw std::runtime_error("Incorrect base position");
     }
 
-    fs::path log_directory = _directory / fs::path(file_name + "_log");
+    fs::path log_directory = _directory / "logs" / _encoded_file_name;
     LoadUndoRecords(log_directory);
 }
 
@@ -280,25 +291,37 @@ bool File::Delete(int32_t version, const Bytes& signature) {
         .signature = signature,
     });
     _file_stream.close();
-    fs::path file_path = _directory / _file_name;
+    fs::path file_path = _directory / "files" / _encoded_file_name;
     fs::remove(file_path);
     return true;
 }
 
-bool File::Recreate(const Bytes& public_key) {
+bool File::Recreate(int32_t version, const Bytes& signature) {
     if (!_deleted()) {
+        return false;
+    }
+#ifndef NO_VERIFY
+    if (!VerifyUpdate(signature, _public_key, _file_name, 0, 0, version, false)) {
+        throw std::runtime_error("Version signature verification failed");
+    }
+#endif
+    int32_t new_version = _version() + 1;
+    if (version < new_version) {
+        /* Stale write. */
+        return true;
+    } else if (version != new_version) {
+        /* Version gap. */
         return false;
     }
 
     std::fstream::openmode open_mode = std::fstream::binary | std::fstream::in |
                                        std::fstream::out | std::fstream::trunc;
-    fs::path file_path = _directory / _file_name;
+    fs::path file_path = _directory / "files" / _encoded_file_name;
     _file_stream.open(file_path, open_mode);
     if (_file_stream.is_open()) {
         throw std::runtime_error("Failed to open");
     }
 
-    int32_t new_version = _version() + 1;
     _update_record.clear();
     _update_record[new_version - 1] = CreateUndoRecord(UpdateMetadata{
         .version = new_version,
@@ -308,7 +331,6 @@ bool File::Recreate(const Bytes& public_key) {
         .is_delete = true,
         .signature = Bytes(SigningKey::kSignatureSize),
     });
-    _public_key = SigningKey(public_key, false);
     WriteMetadata();
     return true;
 }
@@ -317,8 +339,11 @@ std::string File::FileName() const { return _file_name; }
 
 Bytes File::PublicKey() const { return _public_key.PublicKey(); }
 
+fs::path File::UndoLogDirectory() const {
+    return _directory / "logs" / _encoded_file_name;
+}
 fs::path File::UndoLogPath(int32_t version) const {
-    return _directory / fs::path(_file_name + "_log") / std::to_string(version);
+    return UndoLogDirectory() / std::to_string(version);
 }
 
 UndoRecord File::CreateUndoRecord(const UpdateMetadata& metadata) {

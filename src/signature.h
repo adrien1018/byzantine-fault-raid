@@ -1,14 +1,14 @@
 #pragma once
 
-#include <openssl/evp.h>
-
-#include <filesystem>
 #include <memory>
 #include <vector>
+#include <filesystem>
+#include <openssl/evp.h>
+
+#include "bytes.h"
 
 using EVP_PKEY_ptr = std::unique_ptr<EVP_PKEY, void (*)(EVP_PKEY*)>;
 using EVP_MD_CTX_ptr = std::unique_ptr<EVP_MD_CTX, void (*)(EVP_MD_CTX*)>;
-using Bytes = std::vector<uint8_t>;
 namespace fs = std::filesystem;
 
 class SigningKey {
@@ -40,6 +40,3 @@ class SigningKey {
     bool Verify(const void* msg, size_t msg_len, const uint8_t* sig) const;
     bool Verify(const Bytes& msg, const Bytes& sig) const;
 };
-
-Bytes StrToBytes(const std::string& str);
-std::string BytesToStr(const Bytes& bytes);

@@ -13,25 +13,10 @@
 
 using filesys::Filesys;
 
-typedef struct FileMetadata {
+struct FileMetadata {
     uint32_t version;
     uint64_t fileSize;
-
-    /* For unordered_map. */
-    bool operator==(const FileMetadata &other) const {
-        return (this->version == other.version) &&
-               (this->fileSize == other.fileSize);
-    }
-
-} FileMetadata;
-
-/* How to hash FileMetadata for unordered_map. */
-template <>
-struct std::hash<FileMetadata> {
-    std::size_t operator()(const FileMetadata &m) const {
-        return std::hash<uint32_t>()(m.version) ^
-               std::hash<uint64_t>()(m.fileSize);
-    }
+    bool isDeleted;
 };
 
 class BFRFileSystem final {
@@ -43,6 +28,7 @@ class BFRFileSystem final {
                   const int numMalicious, const int numFaulty,
                   const int blockSize, const std::string &signing_key_path);
 
+
     /*
      * Returns the list of files.
      */
@@ -52,18 +38,18 @@ class BFRFileSystem final {
      * Creates a new BFR file.
      * Returns 0 on success; -EIO on failure (e.g. file already exists).
      */
-    int create(const char *path) const;
+    int create(const std::string& path) const;
 
     /*
      * Returns the file's metadata if sufficient servers agree.
      */
-    std::optional<FileMetadata> open(const char *path) const;
+    std::optional<FileMetadata> open(const std::string& path) const;
 
     /*
      * Reads a BFR file.
      * Returns the number of bytes read; -errno on failure.
      */
-    int64_t read(const char *path, char *buf, const size_t size,
+    int64_t read(const std::string& path, char *buf, const size_t size,
                  const off_t offset) const;
 
     /*
@@ -71,7 +57,7 @@ class BFRFileSystem final {
      * Only able to be called by the file's owner.
      * Returns the number of bytes written; or -errno on failure.
      */
-    int64_t write(const char *path, const char *buf, const size_t size,
+    int64_t write(const std::string& path, const char *buf, const size_t size,
                   const off_t offset) const;
 
     /*
@@ -79,7 +65,10 @@ class BFRFileSystem final {
      * Only able to be called by the file's owner.
      * Returns 0 on success; -EIO on failure.
      */
-    int unlink(const char *path) const;
+    int unlink(const std::string& path) const;
+
+    // with trailing slash
+    const std::string& GetPrefix() const { return prefix_; }
 
    private:
     std::vector<std::unique_ptr<Filesys::Stub>> servers_;
@@ -89,7 +78,9 @@ class BFRFileSystem final {
     int blockSize_;
     int stripeSize_;
     SigningKey signingKey_;
+    std::string prefix_;
     std::chrono::microseconds timeout_;
 
     std::vector<Filesys::Stub *> QueryServers_() const;
+    std::optional<FileMetadata> QueryMetadata_(const std::string& path, bool with_delete = false) const;
 };

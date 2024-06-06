@@ -5,13 +5,14 @@
 
 DataStorage::DataStorage(const fs::path& storage_directory, uint32_t block_size)
     : _storage_directory(storage_directory), _block_size(block_size) {
+    std::error_code ec;
     /* If directory already existed then nothing happens. */
-    fs::create_directory(_storage_directory);
+    fs::create_directory(_storage_directory, ec);
 
     /* Load the files already in the directory. */
-    for (const auto& entry : fs::directory_iterator(_storage_directory)) {
+    for (const auto& entry : fs::directory_iterator(_storage_directory / "files", ec)) {
         if (entry.is_regular_file()) {
-            std::string file_name = entry.path().filename();
+            std::string file_name = PathDecode(entry.path().filename());
             _file_list.emplace(file_name, new File(_storage_directory,
                                                    file_name, _block_size));
         }
@@ -19,13 +20,18 @@ DataStorage::DataStorage(const fs::path& storage_directory, uint32_t block_size)
 }
 
 bool DataStorage::CreateFile(const std::string& file_name,
-                             const Bytes& public_key) {
+                             uint32_t version, const Bytes& signature) {
     std::lock_guard<std::mutex> lock(_mu);
     if (auto handle = _file_list.find(file_name); handle != _file_list.end()) {
         std::lock_guard<std::mutex> file_lock(handle->second->Mutex());
-        return handle->second->Recreate(public_key);
+        return handle->second->Recreate(version, signature);
     }
-    _file_list.emplace(file_name, new File(_storage_directory, file_name, public_key, _block_size));
+    try {
+        _file_list.emplace(file_name, new File(
+            _storage_directory, file_name, signature, _block_size));
+    } catch (const std::runtime_error& e) {
+        return false;
+    }
     return true;
 }
 

@@ -169,10 +169,12 @@ int main(int argc, char **argv) {
     bfrFs = std::make_unique<BFRFileSystem>(
         config.servers, config.num_malicious, config.num_faulty,
         config.block_size, signing_key);
+    auto prefix = bfrFs->GetPrefix();
 
     std::vector<std::string> files{"a.txt", "b.txt", "c.txt"};
+    for (auto& i : files) i = prefix + i;
 
-    bfrFs->create(files[index].c_str());
+    bfrFs->create(files[index]);
 
     bool deleted = false;
     char buf[101] = {};
@@ -191,7 +193,7 @@ int main(int argc, char **argv) {
             case 1: {
                 std::memset(buf, 0, sizeof(buf));
                 int file_index = rand() % files.size();
-                bfrFs->read(files[file_index].c_str(), buf, 100, 0);
+                bfrFs->read(files[file_index], buf, 100, 0);
                 if (file_index == index) {
                     assert(std::string(buf) == last_wrote.substr(0, 100));
                 }
@@ -199,7 +201,7 @@ int main(int argc, char **argv) {
             } break;
             case 2: {
                 if (deleted) {
-                    bfrFs->create(files[index].c_str());
+                    bfrFs->create(files[index]);
                     deleted = false;
                 }
                 char write_buf[1000] = {};
@@ -207,15 +209,15 @@ int main(int argc, char **argv) {
                 for (int i = 0; i < length; i++) {
                     write_buf[i] = 'a' + rand() % 26;
                 }
-                bfrFs->write(files[index].c_str(), write_buf, length, 0);
+                bfrFs->write(files[index], write_buf, length, 0);
                 last_wrote = std::string(write_buf);
             } break;
             case 3: {
                 if (deleted) {
-                    bfrFs->create(files[index].c_str());
+                    bfrFs->create(files[index]);
                     deleted = false;
                 } else {
-                    // bfrFs->unlink(files[index].c_str());
+                    // bfrFs->unlink(files[index]);
                     // deleted = true;
                 }
             } break;

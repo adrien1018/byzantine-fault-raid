@@ -127,14 +127,6 @@ bool SigningKey::Verify(const Bytes& msg, const Bytes& sig) const {
   return Verify(msg.data(), msg.size(), sig.data());
 }
 
-Bytes StrToBytes(const std::string& str) {
-  return Bytes(str.begin(), str.end());
-}
-
-std::string BytesToStr(const Bytes& bytes) {
-  return std::string(bytes.begin(), bytes.end());
-}
-
 #ifdef DEBUG_ONE_FILE
 
 #include <iostream>

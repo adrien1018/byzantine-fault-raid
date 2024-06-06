@@ -25,6 +25,7 @@ using grpc::CompletionQueue;
 using grpc::InsecureChannelCredentials;
 using grpc::Status;
 
+#define NUM_RETRIES 10
 namespace std {
 
 // custom hash function for std::pair<std::string, uint32_t>
@@ -35,16 +36,39 @@ struct hash<std::pair<std::string, uint32_t>> {
     }
 };
 
+// C++20 erase
+template< class T, class Alloc, class U >
+constexpr typename std::vector<T, Alloc>::size_type erase(
+    std::vector<T, Alloc>& c, const U& value) {
+    auto it = std::remove(c.begin(), c.end(), value);
+    auto r = c.end() - it;
+    c.erase(it, c.end());
+    return r;
+}
+template< class T, class Alloc, class Pred >
+constexpr typename std::vector<T, Alloc>::size_type erase_if(
+    std::vector<T, Alloc>& c, Pred pred) {
+    auto it = std::remove_if(c.begin(), c.end(), pred);
+    auto r = c.end() - it;
+    c.erase(it, c.end());
+    return r;
+}
+
 }  // namespace std
 
 namespace {
 
 bool VerifyUpdateSignature(const filesys::UpdateMetadata& metadata,
-                           const std::string& filename, const std::string& public_key) {
+                           const std::string& filename, const Bytes& public_key) {
     return VerifyUpdate(StrToBytes(metadata.version_signature()), 
-                        SigningKey(StrToBytes(public_key), false), filename,
+                        SigningKey(public_key, false), filename,
                         metadata.stripe_range().offset(), metadata.stripe_range().count(),
                         metadata.version(), metadata.is_delete());
+}
+
+bool VerifyUpdateSignature(const filesys::UpdateMetadata& metadata,
+                           const std::string& filename, const std::string& public_key) {
+    return VerifyUpdateSignature(metadata, filename, StrToBytes(public_key));
 }
 
 }  // namespace
@@ -92,6 +116,7 @@ BFRFileSystem::BFRFileSystem(const std::vector<std::string> &serverAddresses,
     stripeSize_ =
         (blockSize - SigningKey::kSignatureSize) * (numServers_ - numFaulty_);
     signingKey_ = SigningKey(signing_key_path, true);
+    prefix_ = Base64Encode(signingKey_.PublicKey()) + "/";
     timeout_ = 10s;
 }
 
@@ -101,15 +126,71 @@ std::vector<Filesys::Stub *> BFRFileSystem::QueryServers_() const {
     return query_servers;
 }
 
+std::optional<FileMetadata> BFRFileSystem::QueryMetadata_(
+    const std::string& path, bool include_deleted) const {
+    GetFileListArgs args;
+    args.set_file_name(path);
+    args.set_include_deleted(include_deleted);
+
+    bool has_result = false;
+    FileMetadata metadata{
+        .version = 0,
+        .fileSize = 0,
+    };
+
+    size_t success_threshold = numMalicious_ + 1; // anything more than this is fine
+    bool ret = QueryServers<GetFileListReply>(
+        QueryServers_(), args, &Filesys::Stub::AsyncGetFileList,
+        success_threshold, 100ms, timeout_,
+        [&](const std::vector<AsyncResponse<GetFileListReply>> &responses,
+            const std::vector<uint8_t> &replied,
+            size_t &minimum_success) -> bool {
+            for (size_t i = 0; i < responses.size(); ++i) {
+                if (!replied[i] || !responses[i].status.ok()) {
+                    continue;
+                }
+                auto &reply = responses[i].reply;
+                if (!reply.files().size()) {
+                    continue;
+                }
+                auto& file = reply.files(0);
+                if (StrToBytes(file.public_key()) != GetPublicKeyFromPath(path) ||
+                    file.file_name() != path) {
+                    spdlog::warn("Invalid public key for file {}", path);
+                    continue;
+                }
+                if (!VerifyUpdateSignature(file.last_update(), path,
+                                           file.public_key())) {
+                    spdlog::warn("Invalid signature for file {}", path);
+                    continue;
+                }
+                if (!has_result || file.last_update().version() > metadata.version) {
+                    metadata.version = file.last_update().version();
+                    metadata.fileSize = file.last_update().file_size();
+                    metadata.isDeleted = file.last_update().is_delete();
+                    has_result = true;
+                }
+            }
+            return true;
+        },
+        "Open");
+
+    if (!ret || !has_result) {
+        return std::nullopt;
+    }
+    return metadata;
+}
+
 std::unordered_set<std::string> BFRFileSystem::getFileList() const {
     std::unordered_map<std::string, std::map<uint32_t, int>> filenameCounts;
     GetFileListArgs args;
     args.set_include_deleted(false);
 
-    // TODO: either 1. fix public key and get n >= 2p+1 or 2. use n >= 3p+1
+    size_t success_threshold = std::min(2 * numMalicious_ + 1, numServers_ - numMalicious_);
+    size_t accept_threshold = success_threshold - numMalicious_;
     bool ret = QueryServers<GetFileListReply>(
         QueryServers_(), args, &Filesys::Stub::AsyncGetFileList,
-        2 * numFaulty_ + 1, 100ms, timeout_,
+        success_threshold, 100ms, timeout_,
         [&](const std::vector<AsyncResponse<GetFileListReply>> &responses,
             const std::vector<uint8_t> &replied,
             size_t &minimum_success) -> bool {
@@ -125,6 +206,10 @@ std::unordered_set<std::string> BFRFileSystem::getFileList() const {
 
                 for (const FileInfo &fileInfo : reply.files()) {
                     // verify signature
+                    if (StrToBytes(fileInfo.public_key()) != GetPublicKeyFromPath(fileInfo.file_name())) {
+                        spdlog::warn("Invalid public key for file {}", fileInfo.file_name());
+                        continue;
+                    }
                     if (!VerifyUpdateSignature(fileInfo.last_update(), fileInfo.file_name(),
                                                fileInfo.public_key())) {
                         spdlog::warn("Invalid signature for file {}", fileInfo.file_name());
@@ -150,13 +235,12 @@ std::unordered_set<std::string> BFRFileSystem::getFileList() const {
     }
 
     /*
-     * Only consider filenames most common filenames
-     * (those reported by honest servers).
+     * Only consider version with more than accept_threshold replies.
      */
     std::unordered_set<std::string> fileList;
     for (const auto &[filename, lst] : filenameCounts) {
         for (auto& [_, count] : lst) {
-            if (count > numFaulty_) {
+            if ((size_t)count > accept_threshold) {
                 fileList.insert(filename);
                 break;
             }
@@ -166,73 +250,61 @@ std::unordered_set<std::string> BFRFileSystem::getFileList() const {
     return fileList;
 }
 
-int BFRFileSystem::create(const char *path) const {
+int BFRFileSystem::create(const std::string& path) const {
+    if (path.size() <= prefix_.size() || path.substr(0, prefix_.size()) != prefix_) {
+        return -EINVAL;
+    }
+    const std::optional<FileMetadata> metadata = QueryMetadata_(path, true);
+    uint32_t version = 0;
+    if (metadata.has_value()) {
+        if (!metadata.value().isDeleted) {
+            return -EEXIST;
+        }
+        version = metadata.value().version + 1;
+    }
+
     CreateFileArgs args;
     args.set_file_name(path);
-    const Bytes publicKey = signingKey_.PublicKey();
-    args.set_public_key(std::string(publicKey.begin(), publicKey.end()));
+    args.set_version(version);
+    args.set_version_signature(BytesToStr(
+        SignUpdate(signingKey_, path, 0, 0, version, false)));
 
-    const bool createSuccess = QueryServers<Empty>(
-        QueryServers_(), args, &Filesys::Stub::AsyncCreateFile,
-        numServers_ - numFaulty_ + numMalicious_, 100ms, timeout_,
-        [&](const std::vector<AsyncResponse<Empty>> &responses,
-            const std::vector<uint8_t> &replied,
-            size_t &minimum_success) -> bool { return true; },
-        "Create");
-
-    return createSuccess ? 0 : -EIO;
-}
-
-std::optional<FileMetadata> BFRFileSystem::open(const char *path) const {
-    GetFileListArgs args;
-    args.set_file_name(path);
-    args.set_include_deleted(false);
-
-    std::unordered_map<FileMetadata, int> metadataCounts;
-
-    bool ret = QueryServers<GetFileListReply>(
-        QueryServers_(), args, &Filesys::Stub::AsyncGetFileList,
-        numServers_ - numFaulty_, 100ms, timeout_,
-        [&](const std::vector<AsyncResponse<GetFileListReply>> &responses,
-            const std::vector<uint8_t> &replied,
-            size_t &minimum_success) -> bool {
-            for (size_t i = 0; i < responses.size(); ++i) {
-                if (!replied[i] || !responses[i].status.ok()) {
-                    continue;
+    auto servers = QueryServers_();
+    for (int i = 0; i < NUM_RETRIES; i++) {
+        size_t success_threshold = servers.size() - numFaulty_ + numMalicious_;
+        std::vector<uint8_t> success = std::vector<uint8_t>(numServers_, 0);
+        const bool createSuccess = QueryServers<Empty>(
+            QueryServers_(), args, &Filesys::Stub::AsyncCreateFile,
+            0, 0s, timeout_,
+            [&](const std::vector<AsyncResponse<Empty>> &responses,
+                const std::vector<uint8_t> &replied,
+                size_t &minimum_success) -> bool {
+                size_t num_success = 0;
+                for (size_t i = 0; i < responses.size(); ++i) {
+                    if (replied[i] && responses[i].status.ok()) {
+                        success[i] = 1;
+                        num_success++;
+                    }
                 }
-                auto &reply = responses[i].reply;
-                if (!reply.files().size()) {
-                    continue;
-                }
-                const FileMetadata m = {
-                    .version = reply.files()[0].last_update().version(),
-                    .fileSize = reply.files()[0].last_update().file_size()};
-                ++metadataCounts[m];
-            }
-            return true;
-        },
-        "Open");
-
-    if (!ret || metadataCounts.empty()) {
-        return std::nullopt;
+                return num_success >= success_threshold;
+            }, "Create");
+        if (createSuccess) {
+            return 0;
+        }
+        for (int i = 0; i < numServers_; ++i) {
+            if (success[i]) servers[i] = nullptr;
+        }
+        std::erase(servers, nullptr);
     }
 
-    const auto commonMetadata =
-        std::max_element(std::begin(metadataCounts), std::end(metadataCounts),
-                         [](const std::pair<FileMetadata, int> &p1,
-                            const std::pair<FileMetadata, int> &p2) {
-                             return p1.second < p2.second;
-                         });
-
-    if (commonMetadata->second > numFaulty_) {
-        /* Sufficient servers responded with the same metadata. */
-        return commonMetadata->first;
-    } else {
-        return std::nullopt;
-    }
+    return -EIO;
 }
 
-int64_t BFRFileSystem::read(const char *path, char *buf, size_t size,
+std::optional<FileMetadata> BFRFileSystem::open(const std::string& path) const {
+    return QueryMetadata_(path, false);
+}
+
+int64_t BFRFileSystem::read(const std::string& path, char *buf, size_t size,
                             off_t offset) const {
     const std::optional<FileMetadata> metadata = this->open(path);
     if (metadata.has_value()) {
@@ -351,7 +423,7 @@ int64_t BFRFileSystem::read(const char *path, char *buf, size_t size,
     return size;
 }
 
-int64_t BFRFileSystem::write(const char *path, const char *buf,
+int64_t BFRFileSystem::write(const std::string& path, const char *buf,
                              const size_t size, const off_t offset) const {
     /* Open file to get metadata. */
     const std::optional<FileMetadata> metadata = this->open(path);
@@ -368,6 +440,7 @@ int64_t BFRFileSystem::write(const char *path, const char *buf,
     const uint64_t endStripeId = endOffset / stripeSize_;
 
     const uint64_t numStripes = endStripeId - startStripeId;
+    if (numStripes == 0) return 0;
 
     const uint64_t stripesBufSize = numStripes * stripeSize_;
 
@@ -424,20 +497,42 @@ int64_t BFRFileSystem::write(const char *path, const char *buf,
     }
     Bytes().swap(stripesBuf);
 
-    const bool writeSuccess = QueryServers<Empty>(
-        QueryServers_(), requests, &Filesys::Stub::AsyncWriteBlocks,
-        numServers_ - numFaulty_ + numMalicious_, 100ms, timeout_,
-        [&](const std::vector<AsyncResponse<Empty>> &responses,
-            const std::vector<uint8_t> &replied,
-            size_t &minimum_success) -> bool { return true; },
-        "Write");
+    auto servers = QueryServers_();
+    for (int i = 0; i < NUM_RETRIES; i++) {
+        size_t success_threshold = servers.size() - numFaulty_ + numMalicious_;
+        std::vector<uint8_t> success = std::vector<uint8_t>(numServers_, 0);
+        const bool writeSuccess = QueryServers<Empty>(
+            QueryServers_(), requests, &Filesys::Stub::AsyncWriteBlocks,
+            0, 0s, timeout_,
+            [&](const std::vector<AsyncResponse<Empty>> &responses,
+                const std::vector<uint8_t> &replied,
+                size_t &minimum_success) -> bool {
+                size_t num_success = 0;
+                for (size_t i = 0; i < responses.size(); ++i) {
+                    if (replied[i] && responses[i].status.ok()) {
+                        success[i] = 1;
+                        num_success++;
+                    }
+                }
+                return num_success >= success_threshold;
+            }, "Write");
+        if (writeSuccess) {
+            return 0;
+        }
+        for (int i = 0; i < numServers_; ++i) {
+            if (success[i]) {
+                servers[i] = nullptr;
+                requests[i].clear_block_data();
+            }
+        }
+        std::erase(servers, nullptr);
+        std::erase_if(requests, [](const auto& x) { return x.block_data().empty(); });
+    }
 
-    // TODO: record which servers failed and retry in the background
-    // the record should be in permanent storage so that we can recover
-    return writeSuccess ? size : -EIO;
+    return -EIO;
 }
 
-int BFRFileSystem::unlink(const char *path) const {
+int BFRFileSystem::unlink(const std::string& path) const {
     /* Open file to get metadata. */
     const std::optional<FileMetadata> metadata = this->open(path);
     if (!metadata.has_value()) {
