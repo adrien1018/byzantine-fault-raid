@@ -54,7 +54,7 @@ bool WriteFile(DataStorage& storage,
         .version = version,
         .stripe_offset = stripe_offset,
         .num_stripes = num_stripes,
-        .signature = SignUpdate(private_key, file_name, version, stripe_offset, num_stripes, false),
+        .signature = SignUpdate(private_key, file_name, stripe_offset, num_stripes, version, false),
     };
     return storage.WriteFile(file_name, meta, block_idx, block_data);
 }

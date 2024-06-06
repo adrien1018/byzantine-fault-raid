@@ -185,8 +185,9 @@ bool File::WriteStripes(const UpdateMetadata& metadata, uint32_t block_idx,
             return false;
         }
     }
+    
     if (!VerifyUpdate(metadata.signature, _public_key, _file_name,
-                      metadata.version, metadata.stripe_offset, metadata.num_stripes, false)) {
+                      metadata.stripe_offset, metadata.num_stripes, metadata.version, false)) {
         spdlog::warn("Version signature verification failed");
         return false;
     }

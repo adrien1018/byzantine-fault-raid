@@ -175,7 +175,7 @@ int main(int argc, char **argv) {
     bfrFs->create(files[index].c_str());
 
     bool deleted = false;
-    char buf[100] = {};
+    char buf[101] = {};
     std::string last_wrote;
     for (int i = 0; i < 300; i++) {
         int op = rand() % 4;
@@ -193,7 +193,7 @@ int main(int argc, char **argv) {
                 int file_index = rand() % files.size();
                 bfrFs->read(files[file_index].c_str(), buf, 100, 0);
                 if (file_index == index) {
-                    assert(std::string(buf) == last_wrote);
+                    assert(std::string(buf) == last_wrote.substr(0, 100));
                 }
                 std::cerr << "success\n";
             } break;

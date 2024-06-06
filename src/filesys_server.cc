@@ -128,6 +128,8 @@ class FilesysImpl final : public Filesys::Service {
             .stripe_offset = metadata.stripe_range().offset(),
             .num_stripes = metadata.stripe_range().count(),
             .file_size = metadata.file_size(),
+            .is_delete = false,
+            .signature = StrToBytes(metadata.version_signature()),
         };
         if (!_data_storage.WriteFile(args->file_name(), file_metadata, _server_idx, block_data)) {
             return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,

@@ -21,52 +21,46 @@ bool WaitResponses(size_t N, grpc::CompletionQueue& cq,
                    Callback&& callback, const std::string& log_tag) {
     void* idx;
     bool ok = false;
+    bool shutting_down = false;
     std::vector<uint8_t> replied(N);
     size_t num_success = 0;
     size_t num_received = 0;
-    spdlog::info("{}: Waiting for {} responses", log_tag, N);
-    while (cq.Next(&idx, &ok)) {
+    spdlog::debug("{}: Waiting for {} responses", log_tag, N);
+
+    auto Received = [&]() {
         size_t i = (size_t)idx;
         replied[i] = true;
-        if (ok) num_received++;
+        if (++num_received == N) {
+            cq.Shutdown();
+            shutting_down = true;
+        }
         if (response_buffer[i].status.ok()) num_success++;
         if (log_tag.size()) {
-            spdlog::info(
+            spdlog::debug(
                 "{}: Got response from server {}, ok={}, num_success={}",
                 log_tag, i, response_buffer[i].status.ok(), num_success);
         }
         if (num_received - num_success > N - minimum_success) {
             cq.Shutdown();
-            while (cq.Next(&idx, &ok));
-            break; /* Too many failures. */
+            shutting_down = true;
+            /* Too many failures. */
         }
+    };
+    while (cq.Next(&idx, &ok)) {
+        if (shutting_down || !ok) continue;
+        Received();
         if (num_success >= minimum_success) {
             auto deadline = std::chrono::system_clock::now() + additional_wait;
-            while (cq.AsyncNext(&idx, &ok, deadline) ==
-                   grpc::CompletionQueue::GOT_EVENT) {
-                i = (size_t)idx;
-                replied[i] = true;
-                if (!response_buffer[i].status.ok()) {
-                    std::cerr << response_buffer[i].status.error_message()
-                              << '\n';
-                }
-                if (response_buffer[i].status.ok()) num_success++;
-                if (log_tag.size()) {
-                    spdlog::info(
-                        "{}: Got response from server {}, ok={}, "
-                        "num_success={}",
-                        log_tag, i, response_buffer[i].status.ok(),
-                        num_success);
-                }
+            while (cq.AsyncNext(&idx, &ok, deadline) == grpc::CompletionQueue::GOT_EVENT && ok) {
+                Received();
             }
             if (log_tag.size()) {
-                spdlog::info("{}: Calling callback at {} successes", log_tag,
-                             num_success);
+                spdlog::debug("{}: Calling callback at {} successes", log_tag,
+                              num_success);
             }
             if (callback(response_buffer, replied, minimum_success)) {
                 if (log_tag.size()) {
-                    spdlog::info("{}: Successful callback", log_tag,
-                                 num_success);
+                    spdlog::info("{}: Successful callback", log_tag, num_success);
                 }
                 cq.Shutdown();
                 while (cq.Next(&idx, &ok));
@@ -81,7 +75,8 @@ bool WaitResponses(size_t N, grpc::CompletionQueue& cq,
         }
     }
     if (log_tag.size()) {
-        spdlog::info("{}: Successful callback", log_tag, num_success);
+        spdlog::warn("{}: minimum_success not reached ({}/{}) with {}/{} received responses",
+                     log_tag, num_success, minimum_success, num_received, N);
     }
     return false;
 }
@@ -106,10 +101,10 @@ minimum_success, 100ms, 30s,
 successful responses
   */
 template <class ResponseClass, class RequestClass, class Callback,
-          class PrepareFunction, class Stub, class Rep1, class Period1,
+          class AsyncFunction, class Stub, class Rep1, class Period1,
           class Rep2, class Period2>
 bool QueryServers(const std::vector<Stub*>& servers,
-                  const RequestClass& request, PrepareFunction&& prepare,
+                  const RequestClass& request, AsyncFunction&& async_func,
                   size_t minimum_success,
                   const std::chrono::duration<Rep1, Period1>& additional_wait,
                   const std::chrono::duration<Rep2, Period2>& timeout,
@@ -122,8 +117,7 @@ bool QueryServers(const std::vector<Stub*>& servers,
         grpc::ClientContext& context = contexts[i];
         context.set_deadline(std::chrono::system_clock::now() + timeout);
         std::unique_ptr<grpc::ClientAsyncResponseReader<ResponseClass>>
-            response_header = (servers[i]->*prepare)(&context, request, &cq);
-        response_header->StartCall();
+            response_header = (servers[i]->*async_func)(&context, request, &cq);
         response_header->Finish(&response_buffer[i].reply,
                                 &response_buffer[i].status, (void*)i);
     }
@@ -135,11 +129,11 @@ bool QueryServers(const std::vector<Stub*>& servers,
 }
 
 template <class ResponseClass, class RequestClass, class Callback,
-          class PrepareFunction, class Stub, class Rep1, class Period1,
+          class AsyncFunction, class Stub, class Rep1, class Period1,
           class Rep2, class Period2>
 bool QueryServers(const std::vector<Stub*>& servers,
                   const std::vector<RequestClass>& requests,
-                  PrepareFunction&& prepare, size_t minimum_success,
+                  AsyncFunction&& async_func, size_t minimum_success,
                   const std::chrono::duration<Rep1, Period1>& additional_wait,
                   const std::chrono::duration<Rep2, Period2>& timeout,
                   Callback&& callback, const std::string& log_tag = "") {
@@ -149,12 +143,11 @@ bool QueryServers(const std::vector<Stub*>& servers,
         grpc::ClientContext context;
         context.set_deadline(std::chrono::system_clock::now() + timeout);
         std::unique_ptr<grpc::ClientAsyncResponseReader<ResponseClass>>
-            response_header =
-                (servers[i]->*prepare)(&context, requests[i], &cq);
-        response_header->StartCall();
+            response_header = (servers[i]->*async_func)(&context, requests[i], &cq);
         response_header->Finish(&response_buffer[i].reply,
                                 &response_buffer[i].status, (void*)i);
     }
+    spdlog::info("{}: Requests sent, waiting for responses", log_tag);
 
     return WaitResponses<ResponseClass>(
         servers.size(), cq, response_buffer, minimum_success, additional_wait,

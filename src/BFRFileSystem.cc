@@ -25,6 +25,31 @@ using grpc::CompletionQueue;
 using grpc::InsecureChannelCredentials;
 using grpc::Status;
 
+namespace std {
+
+// custom hash function for std::pair<std::string, uint32_t>
+template <>
+struct hash<std::pair<std::string, uint32_t>> {
+    size_t operator()(const std::pair<std::string, uint32_t> &p) const {
+        return std::hash<std::string>()(p.first) ^ std::hash<uint32_t>()(p.second);
+    }
+};
+
+}  // namespace std
+
+namespace {
+
+bool VerifyUpdateSignature(const filesys::UpdateMetadata& metadata,
+                           const std::string& filename, const std::string& public_key) {
+    return VerifyUpdate(StrToBytes(metadata.version_signature()), 
+                        SigningKey(StrToBytes(public_key), false), filename,
+                        metadata.stripe_range().offset(), metadata.stripe_range().count(),
+                        metadata.version(), metadata.is_delete());
+}
+
+}  // namespace
+
+
 /*
  * Rounds down a number to the closest specified multiple.
  */
@@ -77,13 +102,14 @@ std::vector<Filesys::Stub *> BFRFileSystem::QueryServers_() const {
 }
 
 std::unordered_set<std::string> BFRFileSystem::getFileList() const {
-    std::unordered_map<std::string, int> filenameCounts;
+    std::unordered_map<std::string, std::map<uint32_t, int>> filenameCounts;
     GetFileListArgs args;
     args.set_include_deleted(false);
 
+    // TODO: either 1. fix public key and get n >= 2p+1 or 2. use n >= 3p+1
     bool ret = QueryServers<GetFileListReply>(
-        QueryServers_(), args, &Filesys::Stub::PrepareAsyncGetFileList,
-        numServers_ - numFaulty_, 100ms, timeout_,
+        QueryServers_(), args, &Filesys::Stub::AsyncGetFileList,
+        2 * numFaulty_ + 1, 100ms, timeout_,
         [&](const std::vector<AsyncResponse<GetFileListReply>> &responses,
             const std::vector<uint8_t> &replied,
             size_t &minimum_success) -> bool {
@@ -95,15 +121,25 @@ std::unordered_set<std::string> BFRFileSystem::getFileList() const {
                  * because a malicious server could return the same filename
                  * more than once.
                  */
-                std::unordered_set<std::string> uniqueFilenames;
+                std::unordered_map<std::string, uint32_t> uniqueFilenames;
 
                 for (const FileInfo &fileInfo : reply.files()) {
+                    // verify signature
+                    if (!VerifyUpdateSignature(fileInfo.last_update(), fileInfo.file_name(),
+                                               fileInfo.public_key())) {
+                        spdlog::warn("Invalid signature for file {}", fileInfo.file_name());
+                        continue;
+                    }
+                    if (fileInfo.start_version() > fileInfo.last_update().version()) {
+                        spdlog::warn("Invalid version for file {}", fileInfo.file_name());
+                        continue;
+                    }
                     std::string filename = fileInfo.file_name();
-                    uniqueFilenames.insert(filename);
+                    uniqueFilenames.emplace(fileInfo.file_name(), fileInfo.start_version());
                 }
 
-                for (const std::string &filename : uniqueFilenames) {
-                    ++filenameCounts[filename];
+                for (auto&[filename, version] : uniqueFilenames) {
+                    ++filenameCounts[filename][version];
                 }
             }
             return true;
@@ -118,9 +154,12 @@ std::unordered_set<std::string> BFRFileSystem::getFileList() const {
      * (those reported by honest servers).
      */
     std::unordered_set<std::string> fileList;
-    for (const auto &[filename, count] : filenameCounts) {
-        if (count > numMalicious_) {
-            fileList.insert(filename);
+    for (const auto &[filename, lst] : filenameCounts) {
+        for (auto& [_, count] : lst) {
+            if (count > numFaulty_) {
+                fileList.insert(filename);
+                break;
+            }
         }
     }
 
@@ -134,7 +173,7 @@ int BFRFileSystem::create(const char *path) const {
     args.set_public_key(std::string(publicKey.begin(), publicKey.end()));
 
     const bool createSuccess = QueryServers<Empty>(
-        QueryServers_(), args, &Filesys::Stub::PrepareAsyncCreateFile,
+        QueryServers_(), args, &Filesys::Stub::AsyncCreateFile,
         numServers_ - numFaulty_ + numMalicious_, 100ms, timeout_,
         [&](const std::vector<AsyncResponse<Empty>> &responses,
             const std::vector<uint8_t> &replied,
@@ -152,7 +191,7 @@ std::optional<FileMetadata> BFRFileSystem::open(const char *path) const {
     std::unordered_map<FileMetadata, int> metadataCounts;
 
     bool ret = QueryServers<GetFileListReply>(
-        QueryServers_(), args, &Filesys::Stub::PrepareAsyncGetFileList,
+        QueryServers_(), args, &Filesys::Stub::AsyncGetFileList,
         numServers_ - numFaulty_, 100ms, timeout_,
         [&](const std::vector<AsyncResponse<GetFileListReply>> &responses,
             const std::vector<uint8_t> &replied,
@@ -242,17 +281,17 @@ int64_t BFRFileSystem::read(const char *path, char *buf, size_t size,
      */
     std::vector<std::vector<Bytes>> encodedBlocks(
         numStripes, std::vector<Bytes>(numServers_));
-    spdlog::debug("outside {}", (void *)&encodedBlocks);
-    spdlog::debug("outside {} {}", numStripes, encodedBlocks.size());
+    /*spdlog::debug("outside {}", (void *)&encodedBlocks);
+    spdlog::debug("outside {} {}", numStripes, encodedBlocks.size());*/
 
     bool ret = QueryServers<ReadBlocksReply>(
-        QueryServers_(), args, &Filesys::Stub::PrepareAsyncReadBlocks,
+        QueryServers_(), args, &Filesys::Stub::AsyncReadBlocks,
         numServers_ - numFaulty_, 100ms, timeout_,
         [&](const std::vector<AsyncResponse<ReadBlocksReply>> &responses,
             const std::vector<uint8_t> &replied,
             size_t &minimum_success) -> bool {
-            spdlog::debug("inside {}", (void *)&encodedBlocks);
-            spdlog::debug("inside {}", encodedBlocks.size());
+            /*spdlog::debug("inside {}", (void *)&encodedBlocks);
+            spdlog::debug("inside {}", encodedBlocks.size());*/
             size_t num_success = 0;
             for (size_t i = 0; i < responses.size(); ++i) {
                 if (!encodedBlocks[0][i].empty() || !replied[i] ||
@@ -269,11 +308,9 @@ int64_t BFRFileSystem::read(const char *path, char *buf, size_t size,
                                    reply.block_data(0).end());
                 for (size_t stripeOffset = 0; stripeOffset < numStripes;
                      ++stripeOffset) {
-                    const Bytes::const_iterator first =
-                        blocks.begin() + (stripeOffset * blockSize_);
-                    const Bytes::const_iterator last =
-                        blocks.begin() + ((stripeOffset + 1) * blockSize_);
-                    encodedBlocks[stripeOffset][i] = Bytes(first, last);
+                    encodedBlocks[stripeOffset][i] = Bytes(
+                        blocks.begin() + (stripeOffset * blockSize_),
+                        blocks.begin() + ((stripeOffset + 1) * blockSize_));
                 }
                 num_success++;
             }
@@ -284,8 +321,8 @@ int64_t BFRFileSystem::read(const char *path, char *buf, size_t size,
                      ++stripeOffset) {
                     const std::vector<Bytes> stripe =
                         encodedBlocks[stripeOffset];
-                    spdlog::debug("{}, {}, {}", stripeOffset,
-                                  encodedBlocks.size(), stripe);
+                    /*spdlog::debug("{}, {}, {}", stripeOffset,
+                                  encodedBlocks.size(), stripe);*/
                     const uint64_t stripeId = startStripeId + stripeOffset;
                     // spdlog::debug("Decode {}, {}, {}, {}, {}, {}, {}",
                     //               stripeSize_, numServers_, numFaulty_,
@@ -299,8 +336,8 @@ int64_t BFRFileSystem::read(const char *path, char *buf, size_t size,
                 }
                 memcpy(buf, bytesRead.data() + offsetDiff, size);
             } catch (DecodeError &e) {
-                spdlog::error("Decode error: {} {} {}", e.what(),
-                              e.remaining_blocks, num_success);
+                spdlog::info("Decode error: {} {} {}", e.what(),
+                             e.remaining_blocks, num_success);
                 minimum_success = num_success + e.remaining_blocks;
                 return false;
             }
@@ -333,40 +370,46 @@ int64_t BFRFileSystem::write(const char *path, const char *buf,
     const uint64_t numStripes = endStripeId - startStripeId;
 
     const uint64_t stripesBufSize = numStripes * stripeSize_;
-    char *stripesBuf = (char *)std::calloc(1, stripesBufSize);
-    if (stripesBuf == nullptr) {
-        return -ENOMEM;
-    }
+
+    Bytes stripesBuf(stripesBufSize, 0);
 
     /* Read the stripes. */
+    // TODO: only read the first and the last block
     const int64_t bytesRead =
-        this->read(path, stripesBuf, stripesBufSize, startOffset);
+        this->read(path, reinterpret_cast<char*>(stripesBuf.data()), stripesBufSize, startOffset);
     if (bytesRead < 0) {
         return -EIO;
     }
 
     /* Write the desired bytes onto the read stripes. */
-    std::memcpy(stripesBuf + offsetDiff, buf, size);
+    std::memcpy(stripesBuf.data() + offsetDiff, buf, size);
 
-    /*
-     * Outer vector represents each server.
-     * Inner vector represents each stripe.
-     * Bytes object represents a block.
-     */
-    std::vector<std::vector<Bytes>> blocksToWrite(
-        numServers_,
-        std::vector<Bytes>(numStripes, std::vector<uint8_t>(blockSize_, 0)));
-
+    /* Generate requests */
     const uint32_t newVersion = metadata.value().version + 1;
     const uint64_t newFilesize = (offset + size > metadata.value().fileSize)
                                      ? offset + size
                                      : metadata.value().fileSize;
+    std::vector<WriteBlocksArgs> requests(numServers_);
+
+    std::string update_signature = BytesToStr(
+        SignUpdate(signingKey_, path, startStripeId, numStripes, newVersion, false));
+    for (auto& i : requests) {
+        i.set_file_name(path);
+        i.mutable_block_data()->resize(blockSize_ * numStripes);
+        filesys::UpdateMetadata* update_metadata = i.mutable_metadata();
+        update_metadata->set_file_size(newFilesize);
+        update_metadata->set_version(newVersion);
+        filesys::StripeRange *range = update_metadata->mutable_stripe_range();
+        range->set_offset(startStripeId);
+        range->set_count(numStripes);
+        update_metadata->set_version_signature(update_signature);
+    }
 
     for (uint64_t stripeOffset = 0; stripeOffset < numStripes; ++stripeOffset) {
         /* Encode each stripe. */
         const size_t stripeId = startStripeId + stripeOffset;
-        Bytes rawStripe(stripesBuf + (stripeOffset * stripeSize_),
-                        stripesBuf + ((stripeOffset + 1) * stripeSize_));
+        Bytes rawStripe(stripesBuf.data() + (stripeOffset * stripeSize_),
+                        stripesBuf.data() + ((stripeOffset + 1) * stripeSize_));
         // spdlog::debug("Encode {}, {}, {}, {}, {}, {}, {}", rawStripe,
         //               numServers_, numFaulty_, signingKey_.PublicKey(), path,
         //               stripeId, newVersion);
@@ -375,76 +418,19 @@ int64_t BFRFileSystem::write(const char *path, const char *buf,
                    stripeId, newVersion);
         for (size_t serverId = 0; serverId < encodedStripe.size(); ++serverId) {
             /* Assign a block from each stripe to its corresponding server. */
-            blocksToWrite[serverId][stripeOffset] = encodedStripe[serverId];
+            memcpy(requests[serverId].mutable_block_data()->data() + (stripeOffset * blockSize_),
+                   encodedStripe[serverId].data(), blockSize_);
         }
     }
+    Bytes().swap(stripesBuf);
 
-    std::free(stripesBuf);
-
-    CompletionQueue cq;
-
-    std::vector<AsyncResponse<Empty>> responseBuffer(numServers_);
-    std::vector<ClientContext> contexts(numServers_);
-
-    // TODO: change to QueryServers
-    for (int serverId = 0; serverId < numServers_; ++serverId) {
-        ClientContext &context = contexts[serverId];
-        const std::chrono::system_clock::time_point deadline =
-            std::chrono::system_clock::now() + timeout_;
-        context.set_deadline(deadline);
-        WriteBlocksArgs args;
-        args.set_file_name(path);
-        filesys::UpdateMetadata *metadata = args.mutable_metadata();
-        metadata->set_file_size(newFilesize);
-        metadata->set_version(newVersion);
-        filesys::StripeRange *range = metadata->mutable_stripe_range();
-        range->set_offset(startStripeId);
-        range->set_count(numStripes);
-        Bytes concatenatedBlocks;
-        for (auto &&block : blocksToWrite[serverId]) {
-            concatenatedBlocks.insert(concatenatedBlocks.end(), block.begin(),
-                                      block.end());
-        }
-        // spdlog::debug("Write {}, {}", serverId, concatenatedBlocks);
-        args.set_block_data(
-            std::string(concatenatedBlocks.begin(), concatenatedBlocks.end()));
-        std::unique_ptr<ClientAsyncResponseReader<Empty>> responseHeader =
-            servers_[serverId]->PrepareAsyncWriteBlocks(&context, args, &cq);
-        responseHeader->StartCall();
-        responseHeader->Finish(&responseBuffer[serverId].reply,
-                               &responseBuffer[serverId].status,
-                               (void *)serverId);
-    }
-
-    void *tag;
-    bool ok = false;
-    int successCount = 0;
-    int receiveCount = 0;
-
-    while (cq.Next(&tag, &ok)) {
-        ++receiveCount;
-        size_t serverId = (size_t)tag;
-        if (responseBuffer[serverId].status.ok()) {
-            spdlog::info("WriteBlocks success");
-            successCount++;
-        } else {
-            spdlog::warn("WriteBlocks FAILED");
-        }
-
-        if (successCount >= numServers_ - numFaulty_ + numMalicious_) {
-            /* Sufficient servers successfully acknowledged. */
-            cq.Shutdown();
-            while (cq.Next(&tag, &ok));
-            return size;
-        }
-
-        if (receiveCount - successCount > numFaulty_ - numMalicious_) {
-            /* Too many servers failed. */
-            cq.Shutdown();
-            while (cq.Next(&tag, &ok));
-            return -EIO;
-        }
-    }
+    QueryServers<Empty>(
+        QueryServers_(), requests, &Filesys::Stub::AsyncWriteBlocks,
+        numServers_ - numFaulty_ + numMalicious_, 100ms, timeout_,
+        [&](const std::vector<AsyncResponse<Empty>> &responses,
+            const std::vector<uint8_t> &replied,
+            size_t &minimum_success) -> bool { return true; },
+        "Write");
 
     // TODO: record which servers failed and retry in the background
     // the record should be in permanent storage so that we can recover
@@ -453,12 +439,22 @@ int64_t BFRFileSystem::write(const char *path, const char *buf,
 }
 
 int BFRFileSystem::unlink(const char *path) const {
-    // TODO: obtain version first
+    /* Open file to get metadata. */
+    const std::optional<FileMetadata> metadata = this->open(path);
+    if (!metadata.has_value()) {
+        return -ENOENT;
+    }
+
+    const uint32_t newVersion = metadata.value().version + 1;
+
     DeleteFileArgs args;
     args.set_file_name(path);
+    args.set_version(newVersion);
+    args.set_version_signature(BytesToStr(
+        SignUpdate(signingKey_, path, 0, 0, newVersion, true)));
 
     const bool deleteSuccess = QueryServers<Empty>(
-        QueryServers_(), args, &Filesys::Stub::PrepareAsyncDeleteFile,
+        QueryServers_(), args, &Filesys::Stub::AsyncDeleteFile,
         numServers_ - numFaulty_ + numMalicious_, 100ms, timeout_,
         [&](const std::vector<AsyncResponse<Empty>> &responses,
             const std::vector<uint8_t> &replied,
