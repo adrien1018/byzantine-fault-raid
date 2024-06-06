@@ -424,7 +424,7 @@ int64_t BFRFileSystem::write(const char *path, const char *buf,
     }
     Bytes().swap(stripesBuf);
 
-    QueryServers<Empty>(
+    const bool writeSuccess = QueryServers<Empty>(
         QueryServers_(), requests, &Filesys::Stub::AsyncWriteBlocks,
         numServers_ - numFaulty_ + numMalicious_, 100ms, timeout_,
         [&](const std::vector<AsyncResponse<Empty>> &responses,
@@ -434,8 +434,7 @@ int64_t BFRFileSystem::write(const char *path, const char *buf,
 
     // TODO: record which servers failed and retry in the background
     // the record should be in permanent storage so that we can recover
-
-    return -1;
+    return writeSuccess ? size : -EIO;
 }
 
 int BFRFileSystem::unlink(const char *path) const {
