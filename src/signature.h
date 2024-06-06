@@ -20,6 +20,7 @@ class SigningKey {
 
    public:
     static constexpr size_t kSignatureSize = 64;
+    static constexpr size_t kKeySize = 32;
 
     // note: private key contains the information of public key
     SigningKey();
@@ -39,3 +40,6 @@ class SigningKey {
     bool Verify(const void* msg, size_t msg_len, const uint8_t* sig) const;
     bool Verify(const Bytes& msg, const Bytes& sig) const;
 };
+
+Bytes StrToBytes(const std::string& str);
+std::string BytesToStr(const Bytes& bytes);

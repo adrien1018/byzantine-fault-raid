@@ -78,6 +78,7 @@ void SigningKey::ExportPrivateKey(const fs::path& path) const {
 Bytes SigningKey::PublicKey() const {
   size_t len = 0;
   EVP_PKEY_get_raw_public_key(key_pair_.get(), nullptr, &len);
+  if (len != kKeySize) throw std::runtime_error("Unexpected public key size");
   Bytes str(len);
   EVP_PKEY_get_raw_public_key(key_pair_.get(), (unsigned char*)str.data(), &len);
   return str;
@@ -87,6 +88,7 @@ Bytes SigningKey::PrivateKey() const {
   if (!private_key_) throw std::invalid_argument("Not a private key object");
   size_t len = 0;
   EVP_PKEY_get_raw_private_key(key_pair_.get(), nullptr, &len);
+  if (len != kKeySize) throw std::runtime_error("Unexpected private key size");
   Bytes str(len, 0);
   EVP_PKEY_get_raw_private_key(key_pair_.get(), (unsigned char*)str.data(), &len);
   return str;
@@ -123,6 +125,14 @@ bool SigningKey::Verify(const void* msg, size_t msg_len, const uint8_t* sig) con
 bool SigningKey::Verify(const Bytes& msg, const Bytes& sig) const {
   if (sig.size() != kSignatureSize) return false;
   return Verify(msg.data(), msg.size(), sig.data());
+}
+
+Bytes StrToBytes(const std::string& str) {
+  return Bytes(str.begin(), str.end());
+}
+
+std::string BytesToStr(const Bytes& bytes) {
+  return std::string(bytes.begin(), bytes.end());
 }
 
 #ifdef DEBUG_ONE_FILE

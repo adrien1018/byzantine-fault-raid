@@ -79,7 +79,6 @@ std::vector<Filesys::Stub *> BFRFileSystem::QueryServers_() const {
 std::unordered_set<std::string> BFRFileSystem::getFileList() const {
     std::unordered_map<std::string, int> filenameCounts;
     GetFileListArgs args;
-    args.set_metadata(true);
     args.set_include_deleted(false);
 
     bool ret = QueryServers<GetFileListReply>(
@@ -147,7 +146,6 @@ int BFRFileSystem::create(const char *path) const {
 
 std::optional<FileMetadata> BFRFileSystem::open(const char *path) const {
     GetFileListArgs args;
-    args.set_metadata(true);
     args.set_file_name(path);
     args.set_include_deleted(false);
 
@@ -169,7 +167,7 @@ std::optional<FileMetadata> BFRFileSystem::open(const char *path) const {
                 }
                 const FileMetadata m = {
                     .version = reply.files()[0].last_update().version(),
-                    .fileSize = reply.files()[0].metadata().file_size()};
+                    .fileSize = reply.files()[0].last_update().file_size()};
                 ++metadataCounts[m];
             }
             return true;
@@ -395,16 +393,13 @@ int64_t BFRFileSystem::write(const char *path, const char *buf,
             std::chrono::system_clock::now() + timeout_;
         context.set_deadline(deadline);
         WriteBlocksArgs args;
-        filesys::Metadata *m = args.mutable_metadata();
-        const Bytes publicKey = signingKey_.PublicKey();
-        m->set_public_key(std::string(publicKey.begin(), publicKey.end()));
-        m->set_file_size(newFilesize);
-
-        filesys::StripeRange *range = args.mutable_stripe_range();
         args.set_file_name(path);
+        filesys::UpdateMetadata *metadata = args.mutable_metadata();
+        metadata->set_file_size(newFilesize);
+        metadata->set_version(newVersion);
+        filesys::StripeRange *range = metadata->mutable_stripe_range();
         range->set_offset(startStripeId);
         range->set_count(numStripes);
-        args.set_version(newVersion);
         Bytes concatenatedBlocks;
         for (auto &&block : blocksToWrite[serverId]) {
             concatenatedBlocks.insert(concatenatedBlocks.end(), block.begin(),

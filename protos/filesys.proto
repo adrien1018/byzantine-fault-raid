@@ -31,12 +31,14 @@ message StripeRange {
 message ReadBlocksArgs {
   string file_name = 1;
   repeated StripeRange stripe_ranges = 2;
-  optional uint32 version = 4;
+  optional uint32 version = 3;
 }
 
-message Metadata {
-  bytes public_key = 1;
-  uint64 file_size = 2;
+message UpdateMetadata {
+  uint32 version = 1;
+  StripeRange stripe_range = 2;
+  uint64 file_size = 3;
+  bytes version_signature = 4;
 }
 
 message ReadBlocksReply {
@@ -46,29 +48,19 @@ message ReadBlocksReply {
 
 message WriteBlocksArgs {
   string file_name = 1;
-  StripeRange stripe_range = 2;
-  uint32 version = 3;
-  bytes version_signature = 4;
-  bytes block_data = 5;
-  Metadata metadata = 6;
+  UpdateMetadata metadata = 2;
+  bytes block_data = 3;
 }
 
 message GetFileListArgs {
-  optional bool metadata = 1;
-  optional string file_name = 2;
-  optional bool include_deleted = 3;
-}
-
-message UpdateRecord {
-  uint32 version = 1;
-  StripeRange stripe_range = 2;
-  bytes version_signature = 3;
+  optional string file_name = 1;
+  optional bool include_deleted = 2;
 }
 
 message FileInfo {
   string file_name = 1;
-  UpdateRecord last_update = 2;
-  optional Metadata metadata = 3;
+  bytes public_key = 2;
+  UpdateMetadata last_update = 3;
 }
 
 message GetFileListReply {
@@ -81,7 +73,7 @@ message GetUpdateLogArgs {
 }
 
 message GetUpdateLogReply {
-  repeated UpdateRecord entries = 1;
+  repeated UpdateMetadata entries = 1;
 }
 
 message DeleteFileArgs {

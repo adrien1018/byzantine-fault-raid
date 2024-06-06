@@ -86,7 +86,7 @@ class FilesysImpl final : public Filesys::Service {
         std::string file_name = args->file_name();
         uint32_t version = args->has_version()
                                ? args->version()
-                               : _data_storage.GetLatestVersion(file_name);
+                               : _data_storage.GetLatestVersion(file_name).value().version;
 
         for (auto& range : args->stripe_ranges()) {
             Bytes block_data = _data_storage.ReadFile(file_name, range.offset(),
@@ -105,20 +105,18 @@ class FilesysImpl final : public Filesys::Service {
 
     Status WriteBlocks(ServerContext* context, const WriteBlocksArgs* args,
                        google::protobuf::Empty* _) override {
-        uint32_t version = args->version();
-        std::string file_name = args->file_name();
-        std::string block_data_str = args->block_data();
-        Bytes block_data = Bytes(block_data_str.begin(), block_data_str.end());
+        const filesys::UpdateMetadata& metadata = args->metadata();
+        Bytes block_data = StrToBytes(args->block_data());
 
         // spdlog::info("Server {} write {}", _server_idx, block_data);
 
-        const std::string public_key_str = args->metadata().public_key();
-        Bytes public_key = Bytes(public_key_str.begin(), public_key_str.end());
-        Metadata metadata{.public_key = public_key,
-                          .file_size = args->metadata().file_size()};
-        if (!_data_storage.WriteFile(file_name, args->stripe_range().offset(),
-                                     args->stripe_range().count(), _server_idx,
-                                     version, block_data, metadata)) {
+        UpdateMetadata file_metadata{
+            .version = (int32_t)metadata.version(),
+            .stripe_offset = metadata.stripe_range().offset(),
+            .num_stripes = metadata.stripe_range().count(),
+            .file_size = metadata.file_size(),
+        };
+        if (!_data_storage.WriteFile(args->file_name(), file_metadata, _server_idx, block_data)) {
             return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
                                 "Invalid version.");
         }
@@ -135,15 +133,14 @@ class FilesysImpl final : public Filesys::Service {
             }
             FileInfo* file_info = reply->add_files();
             file_info->set_file_name(file->FileName());
-            filesys::UpdateRecord* last_update = file_info->mutable_last_update();
-            last_update->set_version(file->Version());
-            if (args->metadata()) {
-                Bytes public_key_bytes = file->PublicKey();
-                std::string public_key_str = std::string(
-                    public_key_bytes.begin(), public_key_bytes.end());
-                file_info->mutable_metadata()->set_public_key(public_key_str);
-                file_info->mutable_metadata()->set_file_size(file->FileSize());
-            }
+            file_info->set_public_key(BytesToStr(file->PublicKey()));
+            UpdateMetadata file_last_update = file->LastUpdate();
+            filesys::UpdateMetadata* last_update = file_info->mutable_last_update();
+            last_update->set_version(file_last_update.version);
+            last_update->set_file_size(file_last_update.file_size);
+            last_update->mutable_stripe_range()->set_offset(file_last_update.stripe_offset);
+            last_update->mutable_stripe_range()->set_count(file_last_update.num_stripes);
+            last_update->set_version_signature(BytesToStr(file_last_update.signature));
         }
         return Status::OK;
     }
@@ -193,14 +190,14 @@ class FilesysImpl final : public Filesys::Service {
                             versions.size() - _config.num_malicious - 1;
                         uint32_t target_version = versions[offset];
                         if (versions.size() > _config.num_malicious &&
-                            _data_storage.GetLatestVersion(file_name) <
-                                target_version) {
+                            _data_storage.GetLatestVersion(file_name).value().version <
+                                (int32_t)target_version) {
                             std::thread([this, file_name = file_name,
                                          target_version]() {
                                 // Wait for possible write to come.
                                 std::this_thread::sleep_for(15s);
                                 uint32_t current_version =
-                                    _data_storage.GetLatestVersion(file_name);
+                                    _data_storage.GetLatestVersion(file_name).value().version;
                                 if (current_version < target_version) {
                                     Recovery(file_name, current_version,
                                              target_version);

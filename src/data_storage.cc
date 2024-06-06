@@ -27,7 +27,8 @@ bool DataStorage::CreateFile(const std::string& file_name,
         return false;
     } else {
         if (handle != _file_list.end()) {
-            handle->second->UpdateSignKey(public_key);
+            //handle->second->UpdateSignKey(public_key);
+            // TODO: handle file recreation
         } else {
             _file_list.emplace(
                 file_name, new File(_storage_directory, file_name, public_key,
@@ -37,10 +38,8 @@ bool DataStorage::CreateFile(const std::string& file_name,
     return true;
 }
 
-bool DataStorage::WriteFile(const std::string& file_name,
-                            uint64_t stripe_offset, uint64_t num_stripes,
-                            uint32_t block_idx, uint32_t version,
-                            const Bytes& block_data, const Metadata& metadata) {
+bool DataStorage::WriteFile(const std::string& file_name, const UpdateMetadata& metadata,
+                            uint32_t block_idx, const Bytes& block_data) {
     std::unique_lock<std::mutex> lock(_mu);
     if (_file_list.find(file_name) == _file_list.end()) {
         return false;
@@ -48,13 +47,12 @@ bool DataStorage::WriteFile(const std::string& file_name,
 
     auto file = _file_list[file_name];
     lock.unlock();
-    return file->WriteStripes(stripe_offset, num_stripes, block_idx, version,
-                              block_data, metadata);
+    return file->WriteStripes(metadata, block_idx, block_data);
 }
 
 Bytes DataStorage::ReadFile(const std::string& file_name,
                             uint64_t stripe_offset, uint64_t num_stripes,
-                            uint32_t version) {
+                            int32_t version) {
     std::unique_lock<std::mutex> lock(_mu);
     if (_file_list.find(file_name) == _file_list.end()) {
         return {};
@@ -66,13 +64,12 @@ Bytes DataStorage::ReadFile(const std::string& file_name,
     return file->ReadVersion(version, stripe_offset, num_stripes);
 }
 
-uint32_t DataStorage::GetLatestVersion(const std::string& file_name) {
+std::optional<UpdateMetadata> DataStorage::GetLatestVersion(const std::string& file_name) {
     std::lock_guard<std::mutex> lock(_mu);
     if (_file_list.find(file_name) == _file_list.end()) {
-        return 0; /* TODO: define an error code for not found. */
+        return std::nullopt;
     }
-
-    return _file_list[file_name]->Version();
+    return _file_list[file_name]->LastUpdate();
 }
 
 std::vector<std::shared_ptr<File>> DataStorage::GetFileList(
