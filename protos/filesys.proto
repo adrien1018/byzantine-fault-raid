@@ -47,7 +47,8 @@ message ReadBlocksReply {
 message WriteBlocksArgs {
   string file_name = 1;
   StripeRange stripe_range = 2;
-  uint32 version = 4;
+  uint32 version = 3;
+  bytes version_signature = 4;
   bytes block_data = 5;
   Metadata metadata = 6;
 }
@@ -58,9 +59,15 @@ message GetFileListArgs {
   optional bool include_deleted = 3;
 }
 
+message UpdateRecord {
+  uint32 version = 1;
+  StripeRange stripe_range = 2;
+  bytes version_signature = 3;
+}
+
 message FileInfo {
   string file_name = 1;
-  uint32 version = 2;
+  UpdateRecord last_update = 2;
   optional Metadata metadata = 3;
 }
 
@@ -71,11 +78,6 @@ message GetFileListReply {
 message GetUpdateLogArgs {
   string file_name = 1;
   uint32 after_version = 2;
-}
-
-message UpdateRecord {
-  uint32 version = 1;
-  StripeRange stripe_range = 2;
 }
 
 message GetUpdateLogReply {

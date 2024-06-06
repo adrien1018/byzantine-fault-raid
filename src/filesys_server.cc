@@ -135,7 +135,8 @@ class FilesysImpl final : public Filesys::Service {
             }
             FileInfo* file_info = reply->add_files();
             file_info->set_file_name(file->FileName());
-            file_info->set_version(file->Version());
+            filesys::UpdateRecord* last_update = file_info->mutable_last_update();
+            last_update->set_version(file->Version());
             if (args->metadata()) {
                 Bytes public_key_bytes = file->PublicKey();
                 std::string public_key_str = std::string(
@@ -179,7 +180,7 @@ class FilesysImpl final : public Filesys::Service {
                             const auto& files = responses[i].reply.files();
                             for (auto& file : files) {
                                 std::string file_name = file.file_name();
-                                uint32_t version = file.version();
+                                uint32_t version = file.last_update().version();
                                 file_versions[file_name].emplace_back(version);
                             }
                         }

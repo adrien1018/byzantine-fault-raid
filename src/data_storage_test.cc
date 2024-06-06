@@ -83,9 +83,8 @@ void TestSimpleReadWrite() {
     storage.CreateFile(file_name, public_key);
     Bytes stripe = RandomStripe(file_name, 1, 0, 1);
     storage.WriteFile("temp", 0, 1, 0, 1, stripe, Metadata{});
-    Bytes retrieved_stripe;
-    bool read_success = storage.ReadFile("temp", 0, 1, 1, retrieved_stripe);
-    assert(read_success && stripe == retrieved_stripe && "Block mismatch");
+    Bytes retrieved_stripe = storage.ReadFile("temp", 0, 1, 1);
+    assert(stripe == retrieved_stripe && "Block mismatch");
 
     std::cout << "Passed" << std::endl;
     fs::remove_all(test_dir);
@@ -113,9 +112,8 @@ void TestGetLatestVersion() {
         }
         assert(update_num == storage.GetLatestVersion(file_name) &&
                "Latest version mismatched");
-        Bytes retrieved_stripe;
-        bool read_success = storage.ReadFile(file_name, 0, 1, update_num, retrieved_stripe);
-        assert(read_success && stripe == retrieved_stripe && "Block mismatch");
+        Bytes retrieved_stripe = storage.ReadFile(file_name, 0, 1, update_num);
+        assert(stripe == retrieved_stripe && "Block mismatch");
     }
     std::cout << "Passed" << std::endl;
     fs::remove_all(test_dir);
@@ -322,7 +320,7 @@ void TestConcurrentReadWrite() {
         for (uint32_t i = 0; i < max_version; i++) {
             Bytes content;
             do {
-                bool read_success = storage.ReadFile(file_name, 0, 1, i + 1, content);
+                content = storage.ReadFile(file_name, 0, 1, i + 1);
             } while (content.empty());
             response[idx][i] = content;
             std::this_thread::sleep_for(std::chrono::seconds(5));

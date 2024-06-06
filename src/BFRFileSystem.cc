@@ -110,6 +110,9 @@ std::unordered_set<std::string> BFRFileSystem::getFileList() const {
             return true;
         },
         "GetFileList");
+    if (!ret) {
+        throw std::runtime_error("Failed to get file list");
+    }
 
     /*
      * Only consider filenames most common filenames
@@ -165,7 +168,7 @@ std::optional<FileMetadata> BFRFileSystem::open(const char *path) const {
                     continue;
                 }
                 const FileMetadata m = {
-                    .version = reply.files()[0].version(),
+                    .version = reply.files()[0].last_update().version(),
                     .fileSize = reply.files()[0].metadata().file_size()};
                 ++metadataCounts[m];
             }
@@ -173,7 +176,7 @@ std::optional<FileMetadata> BFRFileSystem::open(const char *path) const {
         },
         "Open");
 
-    if (metadataCounts.empty()) {
+    if (!ret || metadataCounts.empty()) {
         return std::nullopt;
     }
 
@@ -197,7 +200,7 @@ int64_t BFRFileSystem::read(const char *path, char *buf, size_t size,
     const std::optional<FileMetadata> metadata = this->open(path);
     if (metadata.has_value()) {
         const uint64_t filesize = metadata.value().fileSize;
-        if (offset > filesize) {
+        if (offset > (int64_t)filesize) {
             /* Can't read past EOF. */
             return 0;
         }
@@ -385,7 +388,8 @@ int64_t BFRFileSystem::write(const char *path, const char *buf,
     std::vector<AsyncResponse<Empty>> responseBuffer(numServers_);
     std::vector<ClientContext> contexts(numServers_);
 
-    for (size_t serverId = 0; serverId < numServers_; ++serverId) {
+    // TODO: change to QueryServers
+    for (int serverId = 0; serverId < numServers_; ++serverId) {
         ClientContext &context = contexts[serverId];
         const std::chrono::system_clock::time_point deadline =
             std::chrono::system_clock::now() + timeout_;

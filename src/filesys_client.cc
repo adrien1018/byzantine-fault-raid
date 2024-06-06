@@ -184,7 +184,7 @@ int main(int argc, char **argv) {
             case 0: {
                 auto file_list = bfrFs->getFileList();
                 for (const auto &file_name : file_list) {
-                    assert(files.find(file_name) != files.end());
+                    assert(std::find(files.begin(), files.end(), file_name) != files.end());
                 }
                 std::cerr << "success\n";
             } break;
