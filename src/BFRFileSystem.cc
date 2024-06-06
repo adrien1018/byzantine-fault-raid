@@ -453,6 +453,7 @@ int64_t BFRFileSystem::write(const char *path, const char *buf,
 }
 
 int BFRFileSystem::unlink(const char *path) const {
+    // TODO: obtain version first
     DeleteFileArgs args;
     args.set_file_name(path);
 

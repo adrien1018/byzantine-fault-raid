@@ -51,6 +51,7 @@ class File {
     bool _deleted;
     std::thread _garbage_collection;
     const uint32_t _block_size;
+    // TODO: add start version
 
     fs::path UndoLogPath(int32_t version) const;
     std::set<Segment> ReconstructVersion(int32_t version);
