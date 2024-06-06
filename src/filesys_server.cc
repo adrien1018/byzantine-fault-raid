@@ -43,6 +43,19 @@ using grpc::Status;
 
 namespace fs = std::filesystem;
 
+namespace {
+
+void ToUpdateMetadata(filesys::UpdateMetadata& out, const UpdateMetadata& metadata) {
+    out.set_version(metadata.version);
+    out.mutable_stripe_range()->set_offset(metadata.stripe_offset);
+    out.mutable_stripe_range()->set_count(metadata.num_stripes);
+    out.set_file_size(metadata.file_size);
+    out.set_is_delete(metadata.is_delete);
+    out.set_version_signature(BytesToStr(metadata.signature));
+}
+
+} // namespace
+
 class FilesysImpl final : public Filesys::Service {
     Config _config;
     DataStorage _data_storage;
@@ -128,19 +141,16 @@ class FilesysImpl final : public Filesys::Service {
                        GetFileListReply* reply) override {
         const auto file_list = _data_storage.GetFileList(args->file_name());
         for (const auto& file : file_list) {
-            if (!args->include_deleted() && file->Deleted()) {
+            std::lock_guard<std::mutex> lock(file->Mutex());
+            UpdateMetadata file_last_update = file->LastUpdate();
+            if (file_last_update.is_delete && !args->include_deleted()) {
                 continue;
             }
             FileInfo* file_info = reply->add_files();
             file_info->set_file_name(file->FileName());
             file_info->set_public_key(BytesToStr(file->PublicKey()));
-            UpdateMetadata file_last_update = file->LastUpdate();
-            filesys::UpdateMetadata* last_update = file_info->mutable_last_update();
-            last_update->set_version(file_last_update.version);
-            last_update->set_file_size(file_last_update.file_size);
-            last_update->mutable_stripe_range()->set_offset(file_last_update.stripe_offset);
-            last_update->mutable_stripe_range()->set_count(file_last_update.num_stripes);
-            last_update->set_version_signature(BytesToStr(file_last_update.signature));
+            ToUpdateMetadata(*file_info->mutable_last_update(), file_last_update);
+            file_info->set_start_version(file->StartVersion());
         }
         return Status::OK;
     }
@@ -152,7 +162,8 @@ class FilesysImpl final : public Filesys::Service {
 
     Status DeleteFile(ServerContext* context, const DeleteFileArgs* args,
                       google::protobuf::Empty* _) override {
-        if (!_data_storage.DeleteFile(args->file_name())) {
+        if (!_data_storage.DeleteFile(args->file_name(), args->version(),
+                                      StrToBytes(args->version_signature()))) {
             return grpc::Status(grpc::StatusCode::NOT_FOUND, "File not found.");
         }
         return Status::OK;

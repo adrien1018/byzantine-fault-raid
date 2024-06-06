@@ -21,6 +21,7 @@ struct UpdateMetadata {
     uint64_t stripe_offset;
     uint64_t num_stripes;
     uint64_t file_size;
+    bool is_delete;
     Bytes signature;
     // TODO: Deal with deletion
 };
@@ -44,14 +45,13 @@ class File {
     fs::path _directory;
     std::string _file_name;
     SigningKey _public_key;
-    int32_t _first_image_version;
+    int32_t _start_version; // the version number that the creation happens
+    int32_t _first_image_version; // the first version that still has data remaining
     std::map<int32_t, UndoRecord> _update_record;
     std::fstream _file_stream;
     std::atomic<bool> _file_closed;
-    bool _deleted;
     std::thread _garbage_collection;
     const uint32_t _block_size;
-    // TODO: add start version
 
     fs::path UndoLogPath(int32_t version) const;
     std::set<Segment> ReconstructVersion(int32_t version);
@@ -63,6 +63,7 @@ class File {
     void WriteMetadata();
 
     int32_t _version() const;
+    bool _deleted() const;
 
    public:
     File(const std::string& directory, const std::string& file_name,
@@ -70,15 +71,18 @@ class File {
     File(const std::string& directory, const std::string& file_name,
          uint32_t block_size);
     ~File();
+    std::mutex& Mutex() { return _mu; }
+    // obtain the mutex before doing any the following operations
     bool WriteStripes(const UpdateMetadata& metadata, uint32_t block_idx,
                       const Bytes& block_data);
     Bytes ReadVersion(int32_t version, uint64_t stripe_offset,
                       uint64_t num_stripes);
-    void Delete();
-    bool Deleted();
+    bool Delete(int32_t version, const Bytes& signature);
+    bool Recreate(const Bytes& public_key);
     Bytes PublicKey() const;
     std::string FileName() const;
-    UpdateMetadata LastUpdate();
+    UpdateMetadata LastUpdate() const;
+    int32_t StartVersion() const;
 };
 
 #endif

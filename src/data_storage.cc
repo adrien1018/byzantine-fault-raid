@@ -21,20 +21,11 @@ DataStorage::DataStorage(const fs::path& storage_directory, uint32_t block_size)
 bool DataStorage::CreateFile(const std::string& file_name,
                              const Bytes& public_key) {
     std::lock_guard<std::mutex> lock(_mu);
-    if (auto handle = _file_list.find(file_name);
-        handle != _file_list.end() && !handle->second->Deleted()) {
-        /* File already exists. */
-        return false;
-    } else {
-        if (handle != _file_list.end()) {
-            //handle->second->UpdateSignKey(public_key);
-            // TODO: handle file recreation
-        } else {
-            _file_list.emplace(
-                file_name, new File(_storage_directory, file_name, public_key,
-                                    _block_size));
-        }
+    if (auto handle = _file_list.find(file_name); handle != _file_list.end()) {
+        std::lock_guard<std::mutex> file_lock(handle->second->Mutex());
+        return handle->second->Recreate(public_key);
     }
+    _file_list.emplace(file_name, new File(_storage_directory, file_name, public_key, _block_size));
     return true;
 }
 
@@ -44,9 +35,9 @@ bool DataStorage::WriteFile(const std::string& file_name, const UpdateMetadata& 
     if (_file_list.find(file_name) == _file_list.end()) {
         return false;
     }
-
-    auto file = _file_list[file_name];
+    auto& file = _file_list[file_name];
     lock.unlock();
+    std::lock_guard<std::mutex> file_lock(file->Mutex());
     return file->WriteStripes(metadata, block_idx, block_data);
 }
 
@@ -57,10 +48,9 @@ Bytes DataStorage::ReadFile(const std::string& file_name,
     if (_file_list.find(file_name) == _file_list.end()) {
         return {};
     }
-
-    auto file = _file_list[file_name];
+    auto& file = _file_list[file_name];
     lock.unlock();
-
+    std::lock_guard<std::mutex> file_lock(file->Mutex());
     return file->ReadVersion(version, stripe_offset, num_stripes);
 }
 
@@ -69,6 +59,7 @@ std::optional<UpdateMetadata> DataStorage::GetLatestVersion(const std::string& f
     if (_file_list.find(file_name) == _file_list.end()) {
         return std::nullopt;
     }
+    std::lock_guard<std::mutex> file_lock(_file_list[file_name]->Mutex());
     return _file_list[file_name]->LastUpdate();
 }
 
@@ -80,22 +71,21 @@ std::vector<std::shared_ptr<File>> DataStorage::GetFileList(
         file_list.resize(_file_list.size());
         std::transform(_file_list.begin(), _file_list.end(), file_list.begin(),
                        [](const auto& pair) { return pair.second; });
-    } else if (auto entry = _file_list.find(file_name);
-               entry != _file_list.end()) {
+    } else if (auto entry = _file_list.find(file_name); entry != _file_list.end()) {
         file_list.emplace_back(entry->second);
     }
     return file_list;
 }
 
-bool DataStorage::DeleteFile(const std::string& file_name) {
+bool DataStorage::DeleteFile(const std::string& file_name, uint32_t version, const Bytes& signature) {
     std::unique_lock<std::mutex> lock(_mu);
     if (auto handle = _file_list.find(file_name); handle == _file_list.end()) {
         return false;
     } else {
         lock.unlock();
-        handle->second->Delete();
+        std::lock_guard<std::mutex> file_lock(handle->second->Mutex());
+        return handle->second->Delete(version, signature);
     }
-    return true;
 }
 
 std::shared_ptr<File> DataStorage::operator[](const std::string& file_name) {

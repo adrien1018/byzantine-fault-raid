@@ -18,12 +18,14 @@ Bytes GenerateMetadata(const std::string& filename, size_t stripe_id, int versio
   return ret;
 }
 
-Bytes GenerateMetadata(const std::string& filename, size_t stripe_offset, size_t stripe_num, int version) {
-  Bytes ret(24 + filename.size());
+Bytes GenerateMetadata(const std::string& filename, size_t stripe_offset, size_t stripe_num,
+                       int version, bool is_delete) {
+  Bytes ret(25 + filename.size());
   IntToBytes(stripe_offset, ret.data());
   IntToBytes(stripe_num, ret.data() + 8);
   IntToBytes(version, ret.data() + 16);
-  memcpy(ret.data() + 24, filename.data(), filename.size());
+  ret[24] = is_delete;
+  memcpy(ret.data() + 25, filename.data(), filename.size());
   return ret;
 }
 
@@ -145,13 +147,13 @@ bool VerifyBlock(
 }
 
 Bytes SignUpdate(const SigningKey& private_key, const std::string& filename,
-                 size_t stripe_offset, size_t stripe_num, int version) {
-  Bytes metadata = GenerateMetadata(filename, stripe_offset, stripe_num, version);
+                 size_t stripe_offset, size_t stripe_num, int version, bool is_delete) {
+  Bytes metadata = GenerateMetadata(filename, stripe_offset, stripe_num, version, is_delete);
   return private_key.Sign(metadata);
 }
 
 bool VerifyUpdate(const Bytes& sig, const SigningKey& public_key, const std::string& filename,
-                    size_t stripe_offset, size_t stripe_num, int version) {
-  Bytes metadata = GenerateMetadata(filename, stripe_offset, stripe_num, version);
+                    size_t stripe_offset, size_t stripe_num, int version, bool is_delete) {
+  Bytes metadata = GenerateMetadata(filename, stripe_offset, stripe_num, version, is_delete);
   return public_key.Verify(metadata, sig);
 }

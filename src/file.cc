@@ -3,15 +3,17 @@
 #include <iostream>
 #include <iterator>
 #include <optional>
-#include <utility>
+#include <spdlog/spdlog.h>
 
 #include "encode_decode.h"
 
 using namespace std::chrono_literals;
 
+//#define NO_VERIFY
+
 /* Persisting the record on disk. The format is:
     |version (4 bytes)|stripe_offset (8 bytes)|num_stripes (8 bytes)
-    |signature (64 bytes)
+    |is_delete (1 byte)|signature (64 bytes)
     |stripe_size (8 bytes)|metadata_file_size (8 bytes)|has_image (1 byte)
     |buffer_size(8 bytes)|block_data (variable size)| */
 
@@ -20,6 +22,7 @@ UndoRecord UndoRecord::ReadFromFile(std::ifstream& ifs) {
     ifs.read((char*)&record.metadata.version, sizeof(int32_t));
     ifs.read((char*)&record.metadata.stripe_offset, sizeof(uint64_t));
     ifs.read((char*)&record.metadata.num_stripes, sizeof(uint64_t));
+    ifs.read((char*)&record.metadata.is_delete, sizeof(bool));
     record.metadata.signature.resize(SigningKey::kSignatureSize);
     ifs.read((char*)record.metadata.signature.data(), SigningKey::kSignatureSize);
     ifs.read((char*)&record.stripe_size, sizeof(uint64_t));
@@ -37,6 +40,7 @@ void UndoRecord::WriteToFile(std::ofstream& ofs) const {
     ofs.write((char*)&metadata.version, sizeof(int32_t));
     ofs.write((char*)&metadata.stripe_offset, sizeof(uint64_t));
     ofs.write((char*)&metadata.num_stripes, sizeof(uint64_t));
+    ofs.write((char*)&metadata.is_delete, sizeof(bool));
     if (metadata.signature.size() != SigningKey::kSignatureSize) {
         throw std::runtime_error("Invalid signature size");
     }
@@ -51,19 +55,19 @@ void UndoRecord::WriteToFile(std::ofstream& ofs) const {
 }
 
 /* A file is stored as
-    | deleted (1 byte) | public key (32 bytes)
+    | start_version (4 bytes) | public key (32 bytes)
     | block data (variable size)
 */
-const uint64_t File::kBasePosition = sizeof(bool) + SigningKey::kKeySize;
+const uint64_t File::kBasePosition = 4 + 32;
 
 File::File(const std::string& directory, const std::string& file_name,
            const Bytes& public_key, uint32_t _block_size)
     : _directory(directory),
       _file_name(file_name),
       _public_key(public_key, false),
+      _start_version(0),
       _first_image_version(0),
       _file_closed(false),
-      _deleted(false),
       _garbage_collection(&File::GarbageCollectRecord, this),
       _block_size(_block_size) {
     fs::path file_path = _directory / _file_name;
@@ -83,6 +87,7 @@ File::File(const std::string& directory, const std::string& file_name,
         .stripe_offset = 0,
         .num_stripes = 0,
         .file_size = 0,
+        .is_delete = false,
         .signature = Bytes(SigningKey::kSignatureSize), // TODO: Add signature
     };
     _update_record[-1] = CreateUndoRecord(meta);
@@ -94,9 +99,9 @@ File::File(const std::string& directory, const std::string& file_name,
            uint32_t block_size)
     : _directory(directory),
       _file_name(file_name),
+      _start_version(0),
       _first_image_version(0),
       _file_closed(false),
-      _deleted(false),
       _garbage_collection(&File::GarbageCollectRecord, this),
       _block_size(block_size) {
     fs::path file_path = _directory / _file_name;
@@ -104,7 +109,7 @@ File::File(const std::string& directory, const std::string& file_name,
         std::fstream::binary | std::fstream::in | std::fstream::out;
     _file_stream.open(file_path, open_mode);
 
-    _file_stream.read((char*)&_deleted, sizeof(bool));
+    _file_stream.read((char*)&_start_version, sizeof(int32_t));
     Bytes public_key(SigningKey::kKeySize);
     _file_stream.read((char*)public_key.data(), SigningKey::kKeySize);
     _public_key = SigningKey(public_key, false);
@@ -125,6 +130,10 @@ File::~File() {
 
 int32_t File::_version() const {
     return _update_record.rbegin()->first + 1;
+}
+
+bool File::_deleted() const {
+    return _update_record.rbegin()->second.metadata.is_delete;
 }
 
 UndoRecord File::LoadUndoRecord(const std::string& record_path) {
@@ -151,7 +160,7 @@ void File::LoadUndoRecords(const std::string& log_directory) {
 }
 
 void File::WriteMetadata() {
-    _file_stream.write((char*)&_deleted, sizeof(bool));
+    _file_stream.write((char*)&_start_version, sizeof(int32_t));
     Bytes public_key = _public_key.PublicKey();
     if (public_key.size() != SigningKey::kKeySize) {
         throw std::runtime_error("Invalid public key size");
@@ -165,21 +174,28 @@ void File::WriteMetadata() {
 }
 
 bool File::WriteStripes(const UpdateMetadata& metadata, uint32_t block_idx,
-                      const Bytes& block_data) {
+                        const Bytes& block_data) {
+#ifndef NO_VERIFY
     for (uint64_t i = 0; i < metadata.num_stripes; i++) {
         const Bytes block = Bytes(block_data.begin() + i * _block_size,
                                   block_data.begin() + (i + 1) * _block_size);
         if (!VerifyBlock(block, block_idx, _public_key, _file_name,
                          metadata.stripe_offset + i, metadata.version)) {
+            spdlog::warn("Block verification failed");
             return false;
         }
     }
-    std::lock_guard<std::mutex> lock(_mu);
-
-    if (metadata.version <= _version()) {
+    if (!VerifyUpdate(metadata.signature, _public_key, _file_name,
+                      metadata.version, metadata.stripe_offset, metadata.num_stripes, false)) {
+        spdlog::warn("Version signature verification failed");
+        return false;
+    }
+#endif
+    int32_t new_version = _version() + 1;
+    if (metadata.version < new_version) {
         /* Stale write. */
         return true;
-    } else if (metadata.version != _version() + 1) {
+    } else if (metadata.version != new_version) {
         /* Version gap. */
         return false;
     }
@@ -196,9 +212,7 @@ bool File::WriteStripes(const UpdateMetadata& metadata, uint32_t block_idx,
 
 Bytes File::ReadVersion(int32_t version, uint64_t stripe_offset,
                         uint64_t num_stripes) {
-    std::lock_guard<std::mutex> lock(_mu);
-
-    if (_deleted) {
+    if (_deleted()) {
         return {};
     }
     std::set<Segment> segments = ReconstructVersion(version);
@@ -236,36 +250,42 @@ Bytes File::ReadVersion(int32_t version, uint64_t stripe_offset,
     return block_data;
 }
 
-void File::Delete() {
-    std::lock_guard<std::mutex> lock(_mu);
+bool File::Delete(int32_t version, const Bytes& signature) {
+#ifndef NO_VERIFY
+    if (!VerifyUpdate(signature, _public_key, _file_name, 0, 0, version, true)) {
+        spdlog::warn("Version signature verification failed");
+        return false;
+    }
+#endif
+    int32_t new_version = _version() + 1;
+    if (version < new_version) {
+        /* Stale write. */
+        return true;
+    } else if (version != new_version) {
+        /* Version gap. */
+        return false;
+    }
+
     for (const auto& [version, record] : _update_record) {
         fs::remove(UndoLogPath(version));
     }
-    int32_t new_version = _version() + 1;
     _update_record.clear();
     _update_record[new_version - 1] = CreateUndoRecord(UpdateMetadata{
         .version = new_version,
         .stripe_offset = 0,
         .num_stripes = 0,
         .file_size = 0,
-        .signature = Bytes(SigningKey::kSignatureSize), // TODO: Add signature; deletion flag
+        .is_delete = true,
+        .signature = signature,
     });
     _file_stream.close();
     fs::path file_path = _directory / _file_name;
     fs::remove(file_path);
-
-    _deleted = true;
+    return true;
 }
 
-bool File::Deleted() {
-    std::lock_guard<std::mutex> lock(_mu);
-    return _deleted;
-}
-
-/*
-bool File::UpdateSignKey(const Bytes& public_key) {
-    std::lock_guard<std::mutex> lock(_mu);
-    if (!_deleted) {
+bool File::Recreate(const Bytes& public_key) {
+    if (!_deleted()) {
         return false;
     }
 
@@ -273,17 +293,24 @@ bool File::UpdateSignKey(const Bytes& public_key) {
                                        std::fstream::out | std::fstream::trunc;
     fs::path file_path = _directory / _file_name;
     _file_stream.open(file_path, open_mode);
-
-    if (_file_stream.fail()) {
-        throw std::runtime_error("Failed to open fail");
+    if (_file_stream.is_open()) {
+        throw std::runtime_error("Failed to open");
     }
 
-    _deleted = false;
+    int32_t new_version = _version() + 1;
+    _update_record.clear();
+    _update_record[new_version - 1] = CreateUndoRecord(UpdateMetadata{
+        .version = new_version,
+        .stripe_offset = 0,
+        .num_stripes = 0,
+        .file_size = 0,
+        .is_delete = true,
+        .signature = Bytes(SigningKey::kSignatureSize),
+    });
     _public_key = SigningKey(public_key, false);
     WriteMetadata();
     return true;
 }
-*/
 
 std::string File::FileName() const { return _file_name; }
 
@@ -441,8 +468,9 @@ std::set<Segment> File::ReconstructVersion(int32_t version) {
     return segments;
 }
 
-UpdateMetadata File::LastUpdate() {
-    std::lock_guard<std::mutex> lock(_mu);
+UpdateMetadata File::LastUpdate() const {
     if (_update_record.empty()) throw std::runtime_error("No update record");
     return _update_record.rbegin()->second.metadata;
 }
+
+int32_t File::StartVersion() const { return _start_version; }

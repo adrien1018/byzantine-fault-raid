@@ -82,7 +82,7 @@ file(GLOB filesys_src CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/*.cc")
 list(REMOVE_ITEM filesys_src "${CMAKE_SOURCE_DIR}/src/filesys_server.cc" "${CMAKE_SOURCE_DIR}/src/filesys_client.cc" "${CMAKE_SOURCE_DIR}/src/data_storage_test.cc" "${CMAKE_SOURCE_DIR}/src/BFRFileSystem.cc")
 
 add_library(filesys_helper "${filesys_src}")
-target_link_libraries(filesys_helper crypto tomlplusplus::tomlplusplus)
+target_link_libraries(filesys_helper crypto tomlplusplus::tomlplusplus spdlog::spdlog)
 
 # filesys_grpc_proto
 set(GRPC_LIBRARIES ${_REFLECTION} ${_GRPC_GRPCPP} ${_PROTOBUF_LIBPROTOBUF})
@@ -119,4 +119,4 @@ target_link_libraries(encode_test crypto)
 file(GLOB STORAGE_SRC_FILES ${PROJECT_SOURCE_DIR}/src/data_storage* ${PROJECT_SOURCE_DIR}/src/file.cc
 ${PROJECT_SOURCE_DIR}/src/signature.cc ${PROJECT_SOURCE_DIR}/src/encode_decode.cc ${PROJECT_SOURCE_DIR}/src/reed*)
 add_executable(storage_test ${STORAGE_SRC_FILES})
-target_link_libraries(storage_test crypto)
+target_link_libraries(storage_test crypto spdlog::spdlog)
