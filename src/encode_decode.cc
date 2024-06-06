@@ -18,6 +18,15 @@ Bytes GenerateMetadata(const std::string& filename, size_t stripe_id, int versio
   return ret;
 }
 
+Bytes GenerateMetadata(const std::string& filename, size_t stripe_offset, size_t stripe_num, int version) {
+  Bytes ret(24 + filename.size());
+  IntToBytes(stripe_offset, ret.data());
+  IntToBytes(stripe_num, ret.data() + 8);
+  IntToBytes(version, ret.data() + 16);
+  memcpy(ret.data() + 24, filename.data(), filename.size());
+  return ret;
+}
+
 } // namespace
 
 std::vector<Bytes> Encode(
@@ -133,4 +142,16 @@ bool VerifyBlock(
   validate_buffer[block_size] = block_id;
   memcpy(validate_buffer.data() + block_size + 1, metadata.data(), metadata.size());
   return public_key.Verify(validate_buffer.data(), validate_buffer.size(), block.data() + block_size);
+}
+
+Bytes SignUpdate(const SigningKey& private_key, const std::string& filename,
+                 size_t stripe_offset, size_t stripe_num, int version) {
+  Bytes metadata = GenerateMetadata(filename, stripe_offset, stripe_num, version);
+  return private_key.Sign(metadata);
+}
+
+bool VerifyUpdate(const Bytes& sig, const SigningKey& public_key, const std::string& filename,
+                    size_t stripe_offset, size_t stripe_num, int version) {
+  Bytes metadata = GenerateMetadata(filename, stripe_offset, stripe_num, version);
+  return public_key.Verify(metadata, sig);
 }
