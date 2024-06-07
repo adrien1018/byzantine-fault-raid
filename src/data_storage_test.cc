@@ -33,7 +33,7 @@ Bytes RandomBlock(const std::string& file_name, int version, int stripe_id) {
 
     std::vector<Bytes> result =
         Encode(block, 1, 0, private_key, prefix + file_name, stripe_id, version);
-    assert(VerifyBlock(result[0], 0, SigningKey(public_key, false), prefix + file_name,
+    assert(VerifyBlock(result[0], 1, 0, SigningKey(public_key, false), prefix + file_name,
                        stripe_id, version));
     return result[0];
 }
@@ -76,7 +76,7 @@ void TestGetFileList() {
     std::cout << "Running TestGetFileList...   " << std::flush;
     std::string test_dir = "TestGetFileList";
     std::vector<std::string> file_list{"a", "b", "c", "d"};
-    DataStorage storage(test_dir, BLOCK_SIZE);
+    DataStorage storage(test_dir, 1, BLOCK_SIZE);
     for (const auto& file_name : file_list) {
         assert(CreateFile(storage, file_name) &&
                "CreateFile failed");
@@ -104,7 +104,7 @@ void TestGetFileList() {
 void TestSimpleReadWrite() {
     std::cout << "Running TestSimpleReadWrite...   " << std::flush;
     std::string test_dir = "TestSimpleReadWrite";
-    DataStorage storage(test_dir, BLOCK_SIZE);
+    DataStorage storage(test_dir, 1, BLOCK_SIZE);
 
     std::string file_name{"temp"};
     CreateFile(storage, file_name);
@@ -120,7 +120,7 @@ void TestSimpleReadWrite() {
 void TestGetLatestVersion() {
     std::cout << "Running TestGetLatestVersion...   " << std::flush;
     std::string test_dir = "TestGetLatestVersion";
-    DataStorage storage(test_dir, BLOCK_SIZE);
+    DataStorage storage(test_dir, 1, BLOCK_SIZE);
 
     std::vector<std::string> file_list{"a", "b", "c", "d"};
 
@@ -136,7 +136,7 @@ void TestGetLatestVersion() {
             bool ret = WriteFile(storage, file_name, i + 1, 0, 1, 0, stripe);
             assert(ret && "Write failed");
         }
-        assert((int)update_num == storage.GetLatestVersion(prefix + file_name).value().version &&
+        assert(update_num == storage.GetLatestVersion(prefix + file_name).value().version &&
                "Latest version mismatched");
         Bytes retrieved_stripe = ReadFile(storage, file_name, 0, 1, update_num);
         assert(stripe == retrieved_stripe && "Block mismatch");
@@ -148,7 +148,7 @@ void TestGetLatestVersion() {
 void TestExtendFile() {
     std::cout << "Running TestExtendFile...   " << std::flush;
     std::string test_dir = "TestExtendFile";
-    DataStorage storage(test_dir, BLOCK_SIZE);
+    DataStorage storage(test_dir, 1, BLOCK_SIZE);
 
     std::string file_name{"temp"};
     CreateFile(storage, file_name);
@@ -175,7 +175,7 @@ void TestExtendFile() {
 void TestOverlapExtend() {
     std::cout << "Running TestOverlapExtend...   " << std::flush;
     std::string test_dir = "TestOverlapExtend";
-    DataStorage storage(test_dir, BLOCK_SIZE);
+    DataStorage storage(test_dir, 1, BLOCK_SIZE);
 
     const std::string& file_name{"temp"};
     CreateFile(storage, file_name);
@@ -205,7 +205,7 @@ void TestOverlapExtend() {
 void TestSimpleMultipleWrite() {
     std::cout << "Running TestSimpleMultipleWrite...   " << std::flush;
     std::string test_dir = "TestSimpleMultipleWrite";
-    DataStorage storage(test_dir, BLOCK_SIZE);
+    DataStorage storage(test_dir, 1, BLOCK_SIZE);
 
     const std::string file_name{"temp"};
     CreateFile(storage, file_name);
@@ -257,7 +257,7 @@ void TestSimpleMultipleWrite() {
 void TestMultipleExtendWrite() {
     std::cout << "Running TestSimpleMultipleWrite...   " << std::flush;
     std::string test_dir = "TestSimpleMultipleWrite";
-    DataStorage storage(test_dir, BLOCK_SIZE);
+    DataStorage storage(test_dir, 1, BLOCK_SIZE);
 
     const std::string file_name{"temp"};
     CreateFile(storage, file_name);
@@ -292,7 +292,7 @@ void TestMultipleExtendWrite() {
 void TestGarbageCollection() {
     std::cout << "Running TestGarbageCollection...   " << std::flush;
     std::string test_dir = "TestGarbageCollection";
-    DataStorage storage(test_dir, BLOCK_SIZE);
+    DataStorage storage(test_dir, 1, BLOCK_SIZE);
 
     const std::string file_name{"temp"};
     CreateFile(storage, file_name);
@@ -330,7 +330,7 @@ void TestGarbageCollection() {
 void TestConcurrentReadWrite() {
     std::cout << "Running TestConcurrentReadWrite...   " << std::flush;
     std::string test_dir = "TestConcurrentReadWrite";
-    DataStorage storage(test_dir, BLOCK_SIZE);
+    DataStorage storage(test_dir, 1, BLOCK_SIZE);
 
     const uint32_t num_readers = 10;
     const uint32_t max_version = 5;
@@ -387,7 +387,7 @@ void TestConcurrentReadWrite() {
 void TestStorageBackup() {
     std::cout << "Running TestStorageBackup...   " << std::flush;
     std::string test_dir = "TestStorageBackup";
-    DataStorage storage(test_dir, BLOCK_SIZE);
+    DataStorage storage(test_dir, 1, BLOCK_SIZE);
 
     const std::string file_name{"temp"};
     CreateFile(storage, file_name);
@@ -408,7 +408,7 @@ void TestStorageBackup() {
     assert(WriteFile(storage, file_name, 3, 1, 2, 0, update3) &&
            "Write third failed");
 
-    DataStorage second_storage(test_dir, BLOCK_SIZE);
+    DataStorage second_storage(test_dir, 1, BLOCK_SIZE);
     assert(second_storage.GetFileList("")[0]->FileName() == prefix + "temp");
     assert(version3 == ReadFile(second_storage, file_name, 0, 3, 3) &&
            "Version 3 mismatched");

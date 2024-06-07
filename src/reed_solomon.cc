@@ -99,6 +99,8 @@ std::vector<GFInt> ComputeDecodeTable(const std::vector<uint8_t>& pos) {
   return x;
 }
 
+#pragma GCC diagnostic ignored "-Wclass-memaccess"
+
 template <class InFunc>
 inline void RSLoop(size_t blocks, uint8_t deg, const std::vector<GFInt>& table_x, GFInt ls, InFunc in, uint8_t* out) {
   constexpr size_t kBlock = 64;
@@ -120,8 +122,6 @@ inline void RSLoop(size_t blocks, uint8_t deg, const std::vector<GFInt>& table_x
 
 } // namespace
 
-#pragma GCC diagnostic ignored "-Wclass-memaccess"
-
 std::vector<Bytes> RSEncode(uint8_t N, uint8_t D, size_t blocks, const uint8_t in[]) {
   uint8_t deg = N-D;
   auto table = ComputeEncodeTable(deg);
@@ -135,7 +135,7 @@ std::vector<Bytes> RSEncode(uint8_t N, uint8_t D, size_t blocks, const uint8_t i
     memcpy(out[j].data(), in + j * blocks, blocks);
   }
   std::vector<GFInt> table_x(deg);
-  constexpr size_t kBlock = 64;
+
   for (uint8_t x = deg; x < N; x++) {
     for (uint8_t j = 0; j < deg; j++) table_x[j] = table[j] / (GFInt(x) - GFInt(j));
     RSLoop(blocks, deg, table_x, ls[x-deg], [&](uint8_t j) { return in + j * blocks; }, out[x].data());
@@ -171,7 +171,6 @@ bool RSDecode(uint8_t N, uint8_t D, size_t blocks, const std::vector<Bytes>& in,
     for (uint8_t k = 0; k < deg; k++) ls[i] *= GFInt(err_pos[i]) - GFInt(pos[k]);
   }
   std::vector<GFInt> table_x(deg);
-  constexpr size_t kBlock = 64;
   for (uint8_t j = 0; j < err_pos.size(); j++) {
     uint8_t x = err_pos[j];
     for (uint8_t k = 0; k < deg; k++) table_x[k] = table[k] / (GFInt(x) - GFInt(pos[k]));
@@ -197,7 +196,6 @@ bool RSReconstruct(uint8_t N, uint8_t D, size_t blocks, const std::vector<Bytes>
   GFInt ls(1);
   for (uint8_t k = 0; k < deg; k++) ls *= GFInt(block_id) - GFInt(pos[k]);
   std::vector<GFInt> table_x(deg);
-  constexpr size_t kBlock = 64;
   uint8_t x = block_id;
   for (uint8_t k = 0; k < deg; k++) table_x[k] = table[k] / (GFInt(x) - GFInt(pos[k]));
   RSLoop(blocks, deg, table_x, ls, [&](uint8_t k) { return in[pos[k]].data(); }, out);

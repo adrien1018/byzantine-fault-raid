@@ -26,6 +26,10 @@ Config ParseConfig(const std::string& config_file) {
         spdlog::error("num_faulty must be less than the number of servers");
         exit(1);
     }
+    if (config.servers.size() > 255) {
+        spdlog::error("More than 255 servers not supported");
+        exit(1);
+    }
     if (config.servers.size() < config.num_malicious * 3 + 1) {
         spdlog::warn("Less than (num_malicious * 3 + 1) servers. Phantom files are possible.");
     }

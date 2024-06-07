@@ -106,7 +106,9 @@ std::vector<Filesys::Stub *> BFRFileSystem::QueryServers_() const {
 }
 
 std::optional<FileMetadata> BFRFileSystem::QueryMetadata_(
-    const std::string& path, bool include_deleted) const {
+    const std::string& path, bool include_deleted
+) const {
+    spdlog::info("Start query metadata {}", path);
     GetFileListArgs args;
     args.set_file_name(path);
     args.set_include_deleted(include_deleted);
@@ -129,7 +131,7 @@ std::optional<FileMetadata> BFRFileSystem::QueryMetadata_(
                     continue;
                 }
                 auto &reply = responses[i].reply;
-                if (!reply.files().size()) {
+                if (!reply.files_size()) {
                     continue;
                 }
                 auto& file = reply.files(0);
@@ -152,10 +154,14 @@ std::optional<FileMetadata> BFRFileSystem::QueryMetadata_(
     if (!ret || !has_result) {
         return std::nullopt;
     }
+    spdlog::info("Metadata for {}: version={}, size={}, deleted={}",
+                 path, metadata.version, metadata.fileSize, metadata.isDeleted);
     return metadata;
 }
 
 std::unordered_set<std::string> BFRFileSystem::getFileList() const {
+    spdlog::info("Start getFileList");
+
     std::unordered_map<std::string, std::map<uint32_t, int>> filenameCounts;
     GetFileListArgs args;
     args.set_include_deleted(false);
@@ -221,6 +227,7 @@ std::unordered_set<std::string> BFRFileSystem::getFileList() const {
 }
 
 int BFRFileSystem::create(const std::string& path) const {
+    spdlog::info("Start create {}", path);
     if (path.size() <= prefix_.size() || path.substr(0, prefix_.size()) != prefix_) {
         return -EINVAL;
     }
@@ -271,12 +278,14 @@ int BFRFileSystem::create(const std::string& path) const {
 }
 
 std::optional<FileMetadata> BFRFileSystem::open(const std::string& path) const {
+    spdlog::info("Start open {}", path);
     return QueryMetadata_(path, false);
 }
 
 int64_t BFRFileSystem::read(const std::string& path, char *buf, size_t size,
                             off_t offset) const {
-    const std::optional<FileMetadata> metadata = this->open(path);
+    spdlog::info("Start read {} offset={} size={}", path, offset, size);
+    const std::optional<FileMetadata> metadata = this->QueryMetadata_(path);
     if (metadata.has_value()) {
         const uint64_t filesize = metadata.value().fileSize;
         if (offset > (int64_t)filesize) {
@@ -395,8 +404,9 @@ int64_t BFRFileSystem::read(const std::string& path, char *buf, size_t size,
 
 int64_t BFRFileSystem::write(const std::string& path, const char *buf,
                              const size_t size, const off_t offset) const {
+    spdlog::info("Start write {} offset={} size={}", path, offset, size);
     /* Open file to get metadata. */
-    const std::optional<FileMetadata> metadata = this->open(path);
+    const std::optional<FileMetadata> metadata = this->QueryMetadata_(path);
     if (!metadata.has_value()) {
         return -ENOENT;
     }
@@ -503,8 +513,9 @@ int64_t BFRFileSystem::write(const std::string& path, const char *buf,
 }
 
 int BFRFileSystem::unlink(const std::string& path) const {
+    spdlog::info("Start unlink {}", path);
     /* Open file to get metadata. */
-    const std::optional<FileMetadata> metadata = this->open(path);
+    const std::optional<FileMetadata> metadata = this->QueryMetadata_(path);
     if (!metadata.has_value()) {
         return -ENOENT;
     }

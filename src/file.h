@@ -41,10 +41,11 @@ class File {
     static const uint64_t kBasePosition;
 
     std::mutex _mu;
-    fs::path _directory;
-    std::string _file_name;
-    std::string _encoded_file_name;
+    const fs::path _directory;
+    const std::string _file_name;
+    const std::string _encoded_file_name;
     SigningKey _public_key;
+    const int _n_servers;
     uint32_t _start_version; // the version number that the creation happens
     uint32_t _first_image_version; // the first version that still has data remaining
     std::map<uint32_t, UndoRecord> _update_record;
@@ -68,9 +69,9 @@ class File {
 
    public:
     File(const std::string& directory, const std::string& file_name,
-         const Bytes& version_signature, uint32_t block_size);
+         const Bytes& version_signature, int n_servers, uint32_t block_size);
     File(const std::string& directory, const std::string& file_name,
-         uint32_t block_size);
+         int n_servers, uint32_t block_size);
     ~File();
     std::mutex& Mutex() { return _mu; }
     // obtain the mutex before doing any the following operations

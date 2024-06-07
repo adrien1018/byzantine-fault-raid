@@ -33,7 +33,7 @@ void ToUpdateMetadata(filesys::UpdateMetadata& out, const UpdateMetadata& metada
 FilesysImpl::FilesysImpl(
     const Config& config, const fs::path& local_storage, uint32_t server_idx)
         : _config(config),
-          _data_storage(local_storage, config.block_size),
+          _data_storage(local_storage, config.servers.size(), config.block_size),
           _server_idx(server_idx) {
     for (uint32_t i = 0; i < config.servers.size(); i++) {
         if (i == server_idx) {
@@ -50,7 +50,7 @@ FilesysImpl::FilesysImpl(
 
 Status FilesysImpl::CreateFile(
     ServerContext* context, const CreateFileArgs* args, google::protobuf::Empty* _) {
-    std::string file_name = args->file_name();
+    spdlog::info("Server {}: Create {} version={}", _server_idx, args->file_name(), args->version());
     if (_data_storage.CreateFile(
             args->file_name(), args->version(), StrToBytes(args->version_signature()))) {
         return Status::OK;
@@ -63,9 +63,17 @@ Status FilesysImpl::CreateFile(
 Status FilesysImpl::ReadBlocks(ServerContext* context, const ReadBlocksArgs* args,
                     ReadBlocksReply* reply) {
     std::string file_name = args->file_name();
-    uint32_t version = args->has_version()
-                            ? args->version()
-                            : _data_storage.GetLatestVersion(file_name).value().version;
+    uint32_t version = 0;
+    if (args->has_version()) {
+        version = args->version();
+    } else {
+        auto latest_version = _data_storage.GetLatestVersion(file_name);
+        if (!latest_version.has_value()) {
+            return grpc::Status(grpc::StatusCode::NOT_FOUND, "File not found.");
+        }
+        version = latest_version.value().version;
+    }
+    spdlog::info("Server {}: Read {}, version={}", _server_idx, args->file_name(), version);
 
     for (auto& range : args->stripe_ranges()) {
         Bytes block_data = _data_storage.ReadFile(file_name, range.offset(),
@@ -84,10 +92,13 @@ Status FilesysImpl::ReadBlocks(ServerContext* context, const ReadBlocksArgs* arg
 
 Status FilesysImpl::WriteBlocks(ServerContext* context, const WriteBlocksArgs* args,
                     google::protobuf::Empty* _) {
+    spdlog::info("Server {}: Write {}, version={}, offset={}, stripes={}, file_size={}",
+                  _server_idx, args->file_name(), args->metadata().version(),
+                  args->metadata().stripe_range().offset(),
+                  args->metadata().stripe_range().count(),
+                  args->metadata().file_size());
     const filesys::UpdateMetadata& metadata = args->metadata();
     Bytes block_data = StrToBytes(args->block_data());
-
-    // spdlog::info("Server {} write {}", _server_idx, block_data);
 
     UpdateMetadata file_metadata{
         .version = metadata.version(),
@@ -107,6 +118,7 @@ Status FilesysImpl::WriteBlocks(ServerContext* context, const WriteBlocksArgs* a
 
 Status FilesysImpl::GetFileList(ServerContext* context, const GetFileListArgs* args,
                     GetFileListReply* reply) {
+    spdlog::info("Server {}: GetFileList {}", _server_idx, args->file_name());
     const auto file_list = _data_storage.GetFileList(args->file_name());
     for (const auto& file : file_list) {
         std::lock_guard<std::mutex> lock(file->Mutex());
@@ -119,6 +131,8 @@ Status FilesysImpl::GetFileList(ServerContext* context, const GetFileListArgs* a
         file_info->set_public_key(BytesToStr(file->PublicKey()));
         ToUpdateMetadata(*file_info->mutable_last_update(), file_last_update);
         file_info->set_start_version(file->StartVersion());
+        spdlog::debug("Server {}: file {} version={}", _server_idx, file->FileName(),
+                      file_last_update.version);
     }
     return Status::OK;
 }
@@ -131,6 +145,7 @@ Status FilesysImpl::GetUpdateLog(ServerContext* context, const GetUpdateLogArgs*
 
 Status FilesysImpl::DeleteFile(ServerContext* context, const DeleteFileArgs* args,
                     google::protobuf::Empty* _) {
+    spdlog::info("Server {}: Delete {} version={}", _server_idx, args->file_name(), args->version());
     if (!_data_storage.DeleteFile(args->file_name(), args->version(),
                                     StrToBytes(args->version_signature()))) {
         return grpc::Status(grpc::StatusCode::NOT_FOUND, "File not found.");

@@ -61,11 +61,12 @@ void UndoRecord::WriteToFile(std::ofstream& ofs) const {
 const uint64_t File::kBasePosition = 4 + 32;
 
 File::File(const std::string& directory, const std::string& file_name,
-           const Bytes& version_signature, uint32_t _block_size)
+           const Bytes& version_signature, int n_servers, uint32_t _block_size)
     : _directory(directory),
       _file_name(file_name),
       _encoded_file_name(PathEncode(file_name)),
       _public_key(GetPublicKeyFromPath(file_name), false),
+      _n_servers(n_servers),
       _start_version(0),
       _first_image_version(0),
       _file_closed(false),
@@ -106,10 +107,11 @@ File::File(const std::string& directory, const std::string& file_name,
 }
 
 File::File(const std::string& directory, const std::string& file_name,
-           uint32_t block_size)
+           int n_servers, uint32_t block_size)
     : _directory(directory),
       _file_name(file_name),
       _encoded_file_name(PathEncode(file_name)),
+      _n_servers(n_servers),
       _start_version(0),
       _first_image_version(0),
       _file_closed(false),
@@ -190,7 +192,7 @@ bool File::WriteStripes(const UpdateMetadata& metadata, uint32_t block_idx,
     for (uint64_t i = 0; i < metadata.num_stripes; i++) {
         const Bytes block = Bytes(block_data.begin() + i * _block_size,
                                   block_data.begin() + (i + 1) * _block_size);
-        if (!VerifyBlock(block, block_idx, _public_key, _file_name,
+        if (!VerifyBlock(block, _n_servers, block_idx, _public_key, _file_name,
                          metadata.stripe_offset + i, metadata.version)) {
             spdlog::warn("Block verification failed");
             return false;

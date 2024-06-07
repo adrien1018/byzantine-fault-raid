@@ -38,8 +38,12 @@ bool WaitResponses(size_t N, grpc::CompletionQueue& cq,
         if (ok && response_buffer[i].status.ok()) num_success++;
         if (log_tag.size()) {
             spdlog::debug(
-                "{}: Got response from server {}, ok={}, num_success={}",
-                log_tag, i, response_buffer[i].status.ok(), num_success);
+                "{}: Got response from server {}, ok={},{}, num_success={}",
+                log_tag, i, ok, response_buffer[i].status.ok(), num_success);
+            if (!response_buffer[i].status.ok()) {
+                spdlog::warn("{}: Error from server {}: {}", log_tag, i,
+                              response_buffer[i].status.error_message());
+            }
         }
         if (num_received - num_success > N - minimum_success) {
             cq.Shutdown();
@@ -93,7 +97,7 @@ bool WaitResponses(size_t N, grpc::CompletionQueue& cq,
         return true;
     }
     if (log_tag.size()) {
-        spdlog::warn("{}: minimum_success not reached ({}/{}) with {}/{} received responses",
+        spdlog::warn("{}: Ended with num_success={}, min_success={} with {}/{} received responses",
                      log_tag, num_success, minimum_success, num_received, N);
     }
     return false;
