@@ -33,7 +33,7 @@ bool DataStorage::CreateFile(const std::string& file_name,
     }
     try {
         _file_list.emplace(file_name, new File(
-            _storage_directory, file_name, signature, _n_servers, _block_size, _raw_stripe_size));
+            _storage_directory, file_name, version, signature, _n_servers, _block_size, _raw_stripe_size));
     } catch (const std::runtime_error& e) {
         return false;
     }

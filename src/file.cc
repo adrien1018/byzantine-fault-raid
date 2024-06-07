@@ -61,21 +61,21 @@ void UndoRecord::WriteToFile(std::ofstream& ofs) const {
 const uint64_t File::kBasePosition = 4 + 32;
 
 File::File(const std::string& directory, const std::string& file_name,
-           const Bytes& version_signature, int n_servers,
+           uint32_t version, const Bytes& version_signature, int n_servers,
            uint32_t block_size, uint32_t raw_stripe_size)
     : _directory(directory),
       _file_name(file_name),
       _encoded_file_name(PathEncode(file_name)),
       _public_key(GetPublicKeyFromPath(file_name), false),
       _n_servers(n_servers),
-      _start_version(0),
-      _first_image_version(0),
+      _start_version(version),
+      _first_image_version(version),
       _file_closed(false),
       _garbage_collection(&File::_GarbageCollectRecord, this),
       _block_size(block_size),
       _raw_stripe_size(raw_stripe_size) {
 #ifndef NO_VERIFY
-    if (!VerifyUpdate(version_signature, _public_key, _file_name, 0, 0, 0, false)) {
+    if (!VerifyUpdate(version_signature, _public_key, _file_name, 0, 0, version, false)) {
         spdlog::warn("Version signature verification failed");
         throw std::runtime_error("Version signature verification failed");
     }
@@ -95,14 +95,14 @@ File::File(const std::string& directory, const std::string& file_name,
     }
 
     UpdateMetadata meta = {
-        .version = 0,
+        .version = version,
         .stripe_offset = 0,
         .num_stripes = 0,
         .file_size = 0,
         .is_delete = false,
         .signature = version_signature,
     };
-    _update_record[0] = _CreateUndoRecord(meta);
+    _update_record[version] = _CreateUndoRecord(meta);
 
     _WriteMetadata();
 }

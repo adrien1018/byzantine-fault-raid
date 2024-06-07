@@ -1,4 +1,4 @@
 servers = ["127.0.0.1:8080", "127.0.0.1:8081", "127.0.0.1:8082", "127.0.0.1:8083"]
 num_malicious = 0
-num_faulty = 0
+num_faulty = 1
 block_size = 512

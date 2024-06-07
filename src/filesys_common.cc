@@ -154,7 +154,7 @@ std::vector<int64_t> MultiReadOrReconstruct(
         }
         ret = nret;
         return true;
-      }, "Read");
+      }, reconstruct_server == -1 ? "Read" : "Reconstruct");
 
   return ret;
 }

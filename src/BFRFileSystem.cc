@@ -26,6 +26,7 @@ using grpc::InsecureChannelCredentials;
 using grpc::Status;
 
 #define NUM_RETRIES 10
+#define OP_DELAY 10ms
 namespace std {
 
 // custom hash function for std::pair<std::string, uint32_t>
@@ -123,7 +124,7 @@ std::optional<FileMetadata> BFRFileSystem::QueryMetadata_(
     size_t success_threshold = numMalicious_ + 1; // anything more than this is fine
     bool ret = QueryServers<GetFileListReply>(
         QueryServers_(), args, &Filesys::Stub::AsyncGetFileList,
-        success_threshold, 100ms, timeout_,
+        success_threshold, OP_DELAY, timeout_,
         [&](const std::vector<AsyncResponse<GetFileListReply>> &responses,
             const std::vector<uint8_t> &replied,
             size_t &minimum_success) -> bool {
@@ -171,7 +172,7 @@ std::unordered_set<std::string> BFRFileSystem::getFileList() const {
     size_t accept_threshold = success_threshold - numMalicious_;
     bool ret = QueryServers<GetFileListReply>(
         QueryServers_(), args, &Filesys::Stub::AsyncGetFileList,
-        success_threshold, 100ms, timeout_,
+        success_threshold, OP_DELAY, timeout_,
         [&](const std::vector<AsyncResponse<GetFileListReply>> &responses,
             const std::vector<uint8_t> &replied,
             size_t &minimum_success) -> bool {
@@ -438,7 +439,7 @@ int BFRFileSystem::unlink(const std::string& path) const {
 
     const bool deleteSuccess = QueryServers<Empty>(
         QueryServers_(), args, &Filesys::Stub::AsyncDeleteFile,
-        numServers_ - numFaulty_ + numMalicious_, 100ms, timeout_,
+        numServers_ - numFaulty_ + numMalicious_, OP_DELAY, timeout_,
         [&](const std::vector<AsyncResponse<Empty>> &responses,
             const std::vector<uint8_t> &replied,
             size_t &minimum_success) -> bool { return true; },

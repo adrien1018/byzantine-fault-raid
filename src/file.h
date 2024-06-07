@@ -71,7 +71,7 @@ class File {
 
    public:
     File(const std::string& directory, const std::string& file_name,
-         const Bytes& version_signature, int n_servers,
+         uint32_t version, const Bytes& version_signature, int n_servers,
          uint32_t block_size, uint32_t raw_stripe_size);
     File(const std::string& directory, const std::string& file_name,
          int n_servers, uint32_t block_size, uint32_t raw_stripe_size);

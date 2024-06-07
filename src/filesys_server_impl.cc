@@ -185,7 +185,8 @@ void FilesysImpl::HeartBeatThread() {
     tried[_server_idx] = 1;
 
     size_t tried_count = 1;
-    size_t num_peers = _config.num_malicious + 1;
+    // anything larger than num_faulty + 1 will work; get some redundancy for better performance
+    size_t num_peers = std::min(_peers.size() - 1, (size_t)_config.num_faulty + 5);
     while (true) {
         std::vector<int> servers;
         servers.reserve(num_peers);
@@ -226,7 +227,7 @@ void FilesysImpl::HeartBeat(const std::vector<int>& peer_idx) {
 
     QueryServers<GetFileListReply>(
         peers, args, &Filesys::Stub::AsyncGetFileList,
-        0, 10s, 10s,
+        0, 1s, 1s,
         [&](const std::vector<AsyncResponse<GetFileListReply>>& responses,
             const std::vector<uint8_t>& replied,
             size_t& minimum_success) -> bool {
@@ -262,13 +263,15 @@ void FilesysImpl::HeartBeat(const std::vector<int>& peer_idx) {
             }
 
             for (auto& [file_name, target_version] : file_versions) {
-                if (_data_storage.GetLatestVersion(file_name).value().version < target_version) {
+                auto latest_update = _data_storage.GetLatestVersion(file_name);
+                if (!latest_update.has_value() || latest_update.value().version < target_version) {
                     _thread_pool.detach_task([this, file_name = file_name, target_version]() {
                         // Wait for possible write to come.
-                        std::this_thread::sleep_for(15s);
-                        uint32_t current_version =
-                            _data_storage.GetLatestVersion(file_name).value().version;
-                        if (current_version < target_version) {
+                        std::this_thread::sleep_for(5s);
+                        auto latest_update = _data_storage.GetLatestVersion(file_name);
+                        uint32_t current_version = latest_update.has_value() ?
+                            latest_update.value().version : 0;
+                        if (!latest_update.has_value() || current_version < target_version) {
                             Recovery(file_name, current_version);
                         }
                     });
@@ -283,8 +286,12 @@ void FilesysImpl::Recovery(
     std::unique_lock<std::mutex> lock(_recovery_lock[file_name], std::try_to_lock);
     if (!lock.owns_lock()) return;
 
+    spdlog::info("Server {}: Recovery for {} version={}", _server_idx, file_name, current_version);
     const size_t stripe_size = GetStripeSize(_config.block_size, _config.servers.size(), _config.num_malicious);
     Bytes public_key = GetPublicKeyFromPath(file_name);
+
+    auto peers = _peers;
+    peers.erase(peers.begin() + _server_idx);
 
     GetUpdateLogArgs args;
     args.set_file_name(file_name);
@@ -292,12 +299,13 @@ void FilesysImpl::Recovery(
     std::map<uint32_t, UpdateMetadata> update_log;
     std::set<std::pair<uint64_t, uint64_t>> segments;
     std::vector<Bytes> reconstructed_blocks;
+    uint32_t create_version = 0;
     while (true) {
         reconstructed_blocks.clear();
         segments.clear();
 
         bool success = QueryServers<GetUpdateLogReply>(
-            _peers, args, &Filesys::Stub::AsyncGetUpdateLog,
+            peers, args, &Filesys::Stub::AsyncGetUpdateLog,
             _config.num_malicious + 1, 1s, 10s,
             [&](const std::vector<AsyncResponse<GetUpdateLogReply>>& responses,
                 const std::vector<uint8_t>& replied,
@@ -326,6 +334,7 @@ void FilesysImpl::Recovery(
             break;
         }
         // merge segments
+        create_version = 0;
         for (uint32_t version = target_version; version > current_version; version--) {
             auto update_it = update_log.find(version);
             if (update_it == update_log.end()) {
@@ -335,6 +344,10 @@ void FilesysImpl::Recovery(
             }
             auto& metadata = update_log[version];
             if (metadata.is_delete) break;
+            if (metadata.num_stripes == 0) {
+                create_version = version;
+                break;
+            }
             // insert (metadata.stripe_offset, metadata.stripe_offset + metadata.num_stripes) into segments
             // and merge overlapping segments
             auto [it, inserted] = segments.insert({
@@ -386,7 +399,7 @@ void FilesysImpl::Recovery(
         }
         auto read_ret = MultiReadOrReconstruct(
             _peers, file_name, latest_size, std::move(ranges), target_version,
-            _config.num_malicious, _config.block_size, 10s, _config.num_malicious, _server_idx);
+            _config.num_faulty, _config.block_size, 10s, _config.num_malicious, _server_idx);
         if (read_ret.size() != segments.size()) throw std::runtime_error("Unexpected read result");
         bool read_failed = false;
         for (size_t i = 0; i < segments.size(); i++) {
@@ -404,7 +417,16 @@ void FilesysImpl::Recovery(
         break;
     }
     std::shared_ptr<File> file = _data_storage[file_name];
-    if (file == nullptr) throw std::runtime_error("File not found");
+    if (file == nullptr) {
+        auto it = update_log.find(create_version);
+        if (it == update_log.end()) {
+            spdlog::warn("Server {}: file {} version={} recovery failed",
+                         _server_idx, file_name, create_version);
+            return;
+        }
+        _data_storage.CreateFile(file_name, create_version, it->second.signature);
+        file = _data_storage[file_name];
+    }
     if (!file->UpdateUndoLogAndFile(update_log, segments, reconstructed_blocks)) {
         spdlog::warn("Server {}: file {} version={} recovery failed",
                      _server_idx, file_name, update_log.rbegin()->first);
