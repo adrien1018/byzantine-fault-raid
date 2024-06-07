@@ -88,6 +88,7 @@ list(REMOVE_ITEM filesys_src
     "${CMAKE_SOURCE_DIR}/src/filesys_server.cc"
     "${CMAKE_SOURCE_DIR}/src/filesys_server_impl.cc"
     "${CMAKE_SOURCE_DIR}/src/filesys_client.cc"
+    "${CMAKE_SOURCE_DIR}/src/filesys_common.cc"
     "${CMAKE_SOURCE_DIR}/src/data_storage_test.cc"
     "${CMAKE_SOURCE_DIR}/src/BFRFileSystem.cc")
 
@@ -105,17 +106,15 @@ target_link_libraries(filesys_grpc_proto ${GRPC_LIBRARIES})
 
 set(COMMON_LIBRARIES filesys_grpc_proto filesys_helper spdlog::spdlog CLI11::CLI11 tomlplusplus::tomlplusplus)
 
-# BFRFileSystem target
-add_executable(BFRFileSystem "${CMAKE_SOURCE_DIR}/src/BFRFileSystem.cc")
-target_link_libraries(BFRFileSystem ${COMMON_LIBRARIES})
-
 # Targets filesys_(client|server)
 add_executable(filesys_server
-    "${CMAKE_SOURCE_DIR}/src/filesys_server.cc"
-    "${CMAKE_SOURCE_DIR}/src/filesys_server_impl.cc")
+    "${CMAKE_SOURCE_DIR}/src/filesys_common.cc"
+    "${CMAKE_SOURCE_DIR}/src/filesys_server_impl.cc"
+    "${CMAKE_SOURCE_DIR}/src/filesys_server.cc")
 add_executable(filesys_client
-    "${CMAKE_SOURCE_DIR}/src/filesys_client.cc"
-    "${CMAKE_SOURCE_DIR}/src/BFRFileSystem.cc")
+    "${CMAKE_SOURCE_DIR}/src/filesys_common.cc"
+    "${CMAKE_SOURCE_DIR}/src/BFRFileSystem.cc"
+    "${CMAKE_SOURCE_DIR}/src/filesys_client.cc")
 target_link_libraries(filesys_server ${COMMON_LIBRARIES})
 target_link_libraries(filesys_client ${COMMON_LIBRARIES} ${FUSE_LIBRARIES})
 

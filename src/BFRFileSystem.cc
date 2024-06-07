@@ -117,6 +117,7 @@ std::optional<FileMetadata> BFRFileSystem::QueryMetadata_(
     FileMetadata metadata{
         .version = 0,
         .fileSize = 0,
+        .isDeleted = false,
     };
 
     size_t success_threshold = numMalicious_ + 1; // anything more than this is fine
@@ -286,120 +287,19 @@ int64_t BFRFileSystem::read(const std::string& path, char *buf, size_t size,
                             off_t offset) const {
     spdlog::info("Start read {} offset={} size={}", path, offset, size);
     const std::optional<FileMetadata> metadata = this->QueryMetadata_(path);
-    if (metadata.has_value()) {
-        const uint64_t filesize = metadata.value().fileSize;
-        if (offset > (int64_t)filesize) {
-            /* Can't read past EOF. */
-            return 0;
-        }
-        if (offset + size > filesize) {
-            /* Trim read size if exceeds filesize. */
-            size = filesize - offset;
-        }
-    } else {
-        /* File doesn't exist. */
+    if (!metadata.has_value()) {
         return -ENOENT;
     }
-    if (size == 0) return 0;
-
-    const uint64_t startOffset = roundDown(offset, stripeSize_);
-    const uint64_t startStripeId = startOffset / stripeSize_;
-    const uint64_t offsetDiff = offset - startOffset;
-
-    const uint64_t endOffset = roundUp(offset + size, stripeSize_);
-    const uint64_t endStripeId = endOffset / stripeSize_;
-    spdlog::debug("{} {} start{} {}, end {} {}", size, offset, startOffset,
-                  startStripeId, endOffset, endStripeId);
-
-    const uint64_t numStripes = endStripeId - startStripeId;
-    const uint32_t version = metadata.value().version;
-
-    if (!version) {
-        return 0;
-    }
-
-    ReadBlocksArgs args;
-    filesys::StripeRange *range = args.add_stripe_ranges();
-    args.set_file_name(path);
-    range->set_offset(startStripeId);
-    range->set_count(numStripes);
-    args.set_version(version);
-
-    /*
-     * Outer vector represents stripes.
-     * Inner vector represents the blocks within a stripe.
-     * A single block is represented by a Bytes object.
-     */
-    std::vector<std::vector<Bytes>> encodedBlocks(
-        numStripes, std::vector<Bytes>(numServers_));
-    /*spdlog::debug("outside {}", (void *)&encodedBlocks);
-    spdlog::debug("outside {} {}", numStripes, encodedBlocks.size());*/
-
-    bool ret = QueryServers<ReadBlocksReply>(
-        QueryServers_(), args, &Filesys::Stub::AsyncReadBlocks,
-        numServers_ - numFaulty_, 100ms, timeout_,
-        [&](const std::vector<AsyncResponse<ReadBlocksReply>> &responses,
-            const std::vector<uint8_t> &replied,
-            size_t &minimum_success) -> bool {
-            /*spdlog::debug("inside {}", (void *)&encodedBlocks);
-            spdlog::debug("inside {}", encodedBlocks.size());*/
-            size_t num_success = 0;
-            for (size_t i = 0; i < responses.size(); ++i) {
-                if (!encodedBlocks[0][i].empty() || !replied[i] ||
-                    !responses[i].status.ok())
-                    continue;
-                auto &reply = responses[i].reply;
-                spdlog::debug("{} version {}", reply.block_data(0).size(),
-                              reply.version());
-                if (reply.block_data(0).size() != numStripes * blockSize_ ||
-                    reply.version() != version)
-                    continue;
-
-                const Bytes blocks(reply.block_data(0).begin(),
-                                   reply.block_data(0).end());
-                for (size_t stripeOffset = 0; stripeOffset < numStripes;
-                     ++stripeOffset) {
-                    encodedBlocks[stripeOffset][i] = Bytes(
-                        blocks.begin() + (stripeOffset * blockSize_),
-                        blocks.begin() + ((stripeOffset + 1) * blockSize_));
-                }
-                num_success++;
-            }
-
-            try {
-                Bytes bytesRead;
-                for (size_t stripeOffset = 0; stripeOffset < numStripes;
-                     ++stripeOffset) {
-                    const std::vector<Bytes> stripe =
-                        encodedBlocks[stripeOffset];
-                    /*spdlog::debug("{}, {}, {}", stripeOffset,
-                                  encodedBlocks.size(), stripe);*/
-                    const uint64_t stripeId = startStripeId + stripeOffset;
-                    // spdlog::debug("Decode {}, {}, {}, {}, {}, {}, {}",
-                    //               stripeSize_, numServers_, numFaulty_,
-                    //               signingKey_.PublicKey(), path, stripeId,
-                    //               version);
-                    const Bytes decodedStripe =
-                        Decode(stripe, stripeSize_, numServers_, numFaulty_,
-                               signingKey_, path, stripeId, version);
-                    bytesRead.insert(bytesRead.end(), decodedStripe.begin(),
-                                     decodedStripe.end());
-                }
-                memcpy(buf, bytesRead.data() + offsetDiff, size);
-            } catch (DecodeError &e) {
-                spdlog::info("Decode error: {} {} {}", e.what(),
-                             e.remaining_blocks, num_success);
-                minimum_success = num_success + e.remaining_blocks;
-                return false;
-            }
-            return true;
-        },
-        "Read");
-
-    // TODO (optional): retry if failed because version too old?
-
-    if (!ret) return -EIO;
-    return size;
+    
+    std::vector<ReadRange> range = {ReadRange{
+        .offset = (uint64_t)offset,
+        .count = size,
+        .out = buf,
+    }};
+    std::vector<int64_t> bytesRead = MultiRead(
+        QueryServers_(), path, metadata.value().fileSize, std::move(range),
+        metadata.value().version, numFaulty_, blockSize_, -1, timeout_);
+    return bytesRead[0];
 }
 
 int64_t BFRFileSystem::write(const std::string& path, const char *buf,

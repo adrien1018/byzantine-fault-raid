@@ -1,6 +1,6 @@
 #pragma once
 
-#include "filesys.pb.h"
+#include "filesys.grpc.pb.h"
 #include "encode_decode.h"
 
 inline bool VerifyUpdateSignature(
@@ -20,3 +20,16 @@ inline bool VerifyUpdateSignature(
     const std::string& public_key) {
   return VerifyUpdateSignature(metadata, filename, StrToBytes(public_key));
 }
+
+struct ReadRange {
+  uint64_t offset;
+  uint64_t count;
+  char* out;
+};
+
+std::vector<int64_t> MultiRead(
+    std::vector<filesys::Filesys::Stub*> peers,
+    const std::string& filename, size_t file_size,
+    std::vector<ReadRange>&& ranges, uint32_t version,
+    uint32_t num_faulty, uint64_t block_size,
+    int exclude_server, const std::chrono::microseconds& timeout);
