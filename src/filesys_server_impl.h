@@ -35,6 +35,7 @@ class FilesysImpl final : public Filesys::Service {
     std::mutex _mu;
     std::unordered_set<Bytes> _seen_public_keys;
     std::unordered_map<Bytes, std::unordered_map<std::string, std::unordered_set<uint32_t>>> _heartbeat_new_files;
+    std::unordered_map<std::string, std::mutex> _recovery_lock;
 
    public:
     explicit FilesysImpl(const Config& config, const fs::path& local_storage,
@@ -61,6 +62,5 @@ class FilesysImpl final : public Filesys::Service {
   private:
     void HeartBeatThread();
     void HeartBeat(const std::vector<int>& peer_idx);
-    void Recovery(const std::string& file_name, uint32_t current_version,
-                  uint32_t target_version);
+    void Recovery(const std::string& file_name, uint32_t current_version);
 };

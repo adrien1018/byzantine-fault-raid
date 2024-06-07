@@ -73,12 +73,10 @@ message GetFileListReply {
 message GetUpdateLogArgs {
   string file_name = 1;
   uint32 after_version = 2;
-  uint32 target_version = 3;
 }
 
 message GetUpdateLogReply {
-  FileInfo info = 1;
-  repeated UpdateMetadata log = 2;
+  repeated UpdateMetadata log = 1;
 }
 
 message DeleteFileArgs {
