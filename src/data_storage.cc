@@ -49,7 +49,7 @@ bool DataStorage::WriteFile(const std::string& file_name, const UpdateMetadata& 
 
 Bytes DataStorage::ReadFile(const std::string& file_name,
                             uint64_t stripe_offset, uint64_t num_stripes,
-                            int32_t version) {
+                            uint32_t version) {
     std::unique_lock<std::mutex> lock(_mu);
     if (_file_list.find(file_name) == _file_list.end()) {
         return {};

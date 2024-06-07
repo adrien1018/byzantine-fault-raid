@@ -55,7 +55,7 @@ bool CreateFile(DataStorage& storage, const std::string& file_name) {
 }
 
 bool WriteFile(DataStorage& storage,
-               const std::string& file_name, int32_t version, size_t stripe_offset, size_t num_stripes,
+               const std::string& file_name, uint32_t version, size_t stripe_offset, size_t num_stripes,
                int block_idx, const Bytes& block_data) {
     std::string real_name = prefix + file_name;
     UpdateMetadata meta = {
@@ -67,7 +67,7 @@ bool WriteFile(DataStorage& storage,
     return storage.WriteFile(real_name, meta, block_idx, block_data);
 }
 
-Bytes ReadFile(DataStorage& storage, const std::string& file_name, size_t stripe_offset, size_t num_stripes, int32_t version) {
+Bytes ReadFile(DataStorage& storage, const std::string& file_name, size_t stripe_offset, size_t num_stripes, uint32_t version) {
     std::string real_name = prefix + file_name;
     return storage.ReadFile(real_name, stripe_offset, num_stripes, version);
 }

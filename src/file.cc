@@ -19,7 +19,7 @@ using namespace std::chrono_literals;
 
 UndoRecord UndoRecord::ReadFromFile(std::ifstream& ifs) {
     UndoRecord record;
-    ifs.read((char*)&record.metadata.version, sizeof(int32_t));
+    ifs.read((char*)&record.metadata.version, sizeof(uint32_t));
     ifs.read((char*)&record.metadata.stripe_offset, sizeof(uint64_t));
     ifs.read((char*)&record.metadata.num_stripes, sizeof(uint64_t));
     ifs.read((char*)&record.metadata.is_delete, sizeof(bool));
@@ -37,7 +37,7 @@ UndoRecord UndoRecord::ReadFromFile(std::ifstream& ifs) {
 }
 
 void UndoRecord::WriteToFile(std::ofstream& ofs) const {
-    ofs.write((char*)&metadata.version, sizeof(int32_t));
+    ofs.write((char*)&metadata.version, sizeof(uint32_t));
     ofs.write((char*)&metadata.stripe_offset, sizeof(uint64_t));
     ofs.write((char*)&metadata.num_stripes, sizeof(uint64_t));
     ofs.write((char*)&metadata.is_delete, sizeof(bool));
@@ -100,7 +100,7 @@ File::File(const std::string& directory, const std::string& file_name,
         .is_delete = false,
         .signature = version_signature,
     };
-    _update_record[-1] = CreateUndoRecord(meta);
+    _update_record[0] = CreateUndoRecord(meta);
 
     WriteMetadata();
 }
@@ -120,7 +120,7 @@ File::File(const std::string& directory, const std::string& file_name,
         std::fstream::binary | std::fstream::in | std::fstream::out;
     _file_stream.open(file_path, open_mode);
 
-    _file_stream.read((char*)&_start_version, sizeof(int32_t));
+    _file_stream.read((char*)&_start_version, sizeof(uint32_t));
     Bytes public_key(SigningKey::kKeySize);
     _file_stream.read((char*)public_key.data(), SigningKey::kKeySize);
     _public_key = SigningKey(public_key, false);
@@ -139,8 +139,8 @@ File::~File() {
     _garbage_collection.join();
 }
 
-int32_t File::_version() const {
-    return _update_record.rbegin()->first + 1;
+uint32_t File::_version() const {
+    return _update_record.rbegin()->first;
 }
 
 bool File::_deleted() const {
@@ -159,9 +159,9 @@ void File::LoadUndoRecords(const std::string& log_directory) {
     for (const auto& entry : fs::directory_iterator(log_directory)) {
         if (entry.is_regular_file()) {
             std::string file_name = entry.path().filename();
-            int32_t version = std::stol(file_name);
+            uint32_t version = std::stoul(file_name);
             UndoRecord record = LoadUndoRecord(entry.path());
-            if (!record.has_image && version >= 0) {
+            if (!record.has_image) {
                 _first_image_version =
                     std::max(version + 1, _first_image_version);
             }
@@ -171,7 +171,7 @@ void File::LoadUndoRecords(const std::string& log_directory) {
 }
 
 void File::WriteMetadata() {
-    _file_stream.write((char*)&_start_version, sizeof(int32_t));
+    _file_stream.write((char*)&_start_version, sizeof(uint32_t));
     Bytes public_key = _public_key.PublicKey();
     if (public_key.size() != SigningKey::kKeySize) {
         throw std::runtime_error("Invalid public key size");
@@ -203,7 +203,7 @@ bool File::WriteStripes(const UpdateMetadata& metadata, uint32_t block_idx,
         return false;
     }
 #endif
-    int32_t new_version = _version() + 1;
+    uint32_t new_version = _version() + 1;
     if (metadata.version < new_version) {
         /* Stale write. */
         return true;
@@ -213,7 +213,7 @@ bool File::WriteStripes(const UpdateMetadata& metadata, uint32_t block_idx,
     }
 
     UndoRecord record = CreateUndoRecord(metadata);
-    _update_record[metadata.version - 1] = record;
+    _update_record[metadata.version] = record;
 
     _file_stream.seekp(kBasePosition + metadata.stripe_offset * _block_size);
     _file_stream.write((char*)block_data.data(), block_data.size());
@@ -222,7 +222,7 @@ bool File::WriteStripes(const UpdateMetadata& metadata, uint32_t block_idx,
     return true;
 }
 
-Bytes File::ReadVersion(int32_t version, uint64_t stripe_offset,
+Bytes File::ReadVersion(uint32_t version, uint64_t stripe_offset,
                         uint64_t num_stripes) {
     if (_deleted()) {
         return {};
@@ -233,7 +233,7 @@ Bytes File::ReadVersion(int32_t version, uint64_t stripe_offset,
     }
 
     Bytes block_data(num_stripes * _block_size);
-    int32_t current_version = _version();
+    uint32_t current_version = _version();
 
     for (const auto& [start, end, version] : segments) {
         if (stripe_offset >= end || stripe_offset + num_stripes <= start) {
@@ -248,7 +248,7 @@ Bytes File::ReadVersion(int32_t version, uint64_t stripe_offset,
                     (effective_start - stripe_offset) * _block_size,
                 (effective_end - effective_start) * _block_size);
         } else {
-            auto& record = _update_record[version];
+            auto& record = _update_record[version + 1];
             const Bytes& version_block = record.old_image;
             uint64_t image_offset =
                 (effective_start - record.metadata.stripe_offset) * _block_size;
@@ -262,14 +262,14 @@ Bytes File::ReadVersion(int32_t version, uint64_t stripe_offset,
     return block_data;
 }
 
-bool File::Delete(int32_t version, const Bytes& signature) {
+bool File::Delete(uint32_t version, const Bytes& signature) {
 #ifndef NO_VERIFY
     if (!VerifyUpdate(signature, _public_key, _file_name, 0, 0, version, true)) {
         spdlog::warn("Version signature verification failed");
         return false;
     }
 #endif
-    int32_t new_version = _version() + 1;
+    uint32_t new_version = _version() + 1;
     if (version < new_version) {
         /* Stale write. */
         return true;
@@ -282,7 +282,7 @@ bool File::Delete(int32_t version, const Bytes& signature) {
         fs::remove(UndoLogPath(version));
     }
     _update_record.clear();
-    _update_record[new_version - 1] = CreateUndoRecord(UpdateMetadata{
+    _update_record[new_version] = CreateUndoRecord(UpdateMetadata{
         .version = new_version,
         .stripe_offset = 0,
         .num_stripes = 0,
@@ -296,7 +296,7 @@ bool File::Delete(int32_t version, const Bytes& signature) {
     return true;
 }
 
-bool File::Recreate(int32_t version, const Bytes& signature) {
+bool File::Recreate(uint32_t version, const Bytes& signature) {
     if (!_deleted()) {
         return false;
     }
@@ -305,7 +305,7 @@ bool File::Recreate(int32_t version, const Bytes& signature) {
         throw std::runtime_error("Version signature verification failed");
     }
 #endif
-    int32_t new_version = _version() + 1;
+    uint32_t new_version = _version() + 1;
     if (version < new_version) {
         /* Stale write. */
         return true;
@@ -323,7 +323,7 @@ bool File::Recreate(int32_t version, const Bytes& signature) {
     }
 
     _update_record.clear();
-    _update_record[new_version - 1] = CreateUndoRecord(UpdateMetadata{
+    _update_record[new_version] = CreateUndoRecord(UpdateMetadata{
         .version = new_version,
         .stripe_offset = 0,
         .num_stripes = 0,
@@ -342,13 +342,13 @@ Bytes File::PublicKey() const { return _public_key.PublicKey(); }
 fs::path File::UndoLogDirectory() const {
     return _directory / "logs" / _encoded_file_name;
 }
-fs::path File::UndoLogPath(int32_t version) const {
+fs::path File::UndoLogPath(uint32_t version) const {
     return UndoLogDirectory() / std::to_string(version);
 }
 
 UndoRecord File::CreateUndoRecord(const UpdateMetadata& metadata) {
     std::ofstream ofs;
-    ofs.open(UndoLogPath(metadata.version - 1), std::fstream::binary);
+    ofs.open(UndoLogPath(metadata.version), std::fstream::binary);
     if (!ofs.is_open()) {
         throw std::runtime_error("Failed to create undo log.");
     }
@@ -391,7 +391,7 @@ void File::GarbageCollectRecord() {
             continue;
         }
         auto current_version = _version();
-        for (int32_t version = _first_image_version; version <= current_version;
+        for (uint32_t version = _first_image_version; version <= current_version;
              version++) {
             auto it = _update_record.find(version);
             if (it == _update_record.end()) continue;
@@ -421,7 +421,7 @@ uint64_t File::GetCurrentStripeSize() {
     return std::max(kBasePosition, static_cast<uint64_t>(_file_stream.tellg())) - kBasePosition;
 }
 
-std::set<Segment> File::ReconstructVersion(int32_t version) {
+std::set<Segment> File::ReconstructVersion(uint32_t version) {
     auto current_version = _version();
     if (version > current_version) {
         /* The version is higher than the current version. */
@@ -439,12 +439,12 @@ std::set<Segment> File::ReconstructVersion(int32_t version) {
     std::set<Segment> segments{{0, file_size / _block_size, current_version}};
     uint64_t version_block_size = file_size / _block_size;
     for (auto latest_update = _update_record.rbegin();
-         latest_update != _update_record.rend() && latest_update->first >= version;
+         latest_update != _update_record.rend() && latest_update->first > version;
          ++latest_update) {
         /* This operation assumes that each update only keeps the file size
          * the same or extends it, but never shrinks. */
         std::optional<std::set<Segment>::iterator> start_remover = std::nullopt;
-        if (latest_update->first == version) {
+        if (latest_update->first - 1 == version) {
             version_block_size = latest_update->second.stripe_size / _block_size;
         }
         uint64_t segment_start = latest_update->second.metadata.stripe_offset;
@@ -472,11 +472,8 @@ std::set<Segment> File::ReconstructVersion(int32_t version) {
         if (start_remover.has_value()) {
             segments.erase(start_remover.value());
         }
-
-        while (start_overlap != end_overlap) {
-            start_overlap = segments.erase(start_overlap);
-        }
-        segments.emplace(segment_start, segment_end, latest_update->first);
+        segments.erase(start_overlap, end_overlap);
+        segments.emplace(segment_start, segment_end, latest_update->first - 1);
     }
 
     auto unused_segment = segments.lower_bound({version_block_size, 0, 0});
@@ -499,4 +496,4 @@ UpdateMetadata File::LastUpdate() const {
     return _update_record.rbegin()->second.metadata;
 }
 
-int32_t File::StartVersion() const { return _start_version; }
+uint32_t File::StartVersion() const { return _start_version; }

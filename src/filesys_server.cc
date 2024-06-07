@@ -123,7 +123,7 @@ class FilesysImpl final : public Filesys::Service {
         // spdlog::info("Server {} write {}", _server_idx, block_data);
 
         UpdateMetadata file_metadata{
-            .version = (int32_t)metadata.version(),
+            .version = metadata.version(),
             .stripe_offset = metadata.stripe_range().offset(),
             .num_stripes = metadata.stripe_range().count(),
             .file_size = metadata.file_size(),
@@ -202,8 +202,7 @@ class FilesysImpl final : public Filesys::Service {
                             versions.size() - _config.num_malicious - 1;
                         uint32_t target_version = versions[offset];
                         if (versions.size() > _config.num_malicious &&
-                            _data_storage.GetLatestVersion(file_name).value().version <
-                                (int32_t)target_version) {
+                            _data_storage.GetLatestVersion(file_name).value().version < target_version) {
                             std::thread([this, file_name = file_name,
                                          target_version]() {
                                 // Wait for possible write to come.

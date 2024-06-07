@@ -20,13 +20,10 @@ class DataStorage {
     bool WriteFile(const std::string& file_name, const UpdateMetadata& metadata,
                    uint32_t block_idx, const Bytes& block_data);
     Bytes ReadFile(const std::string& file_name, uint64_t stripe_offset,
-                   uint64_t num_stripe, int32_t version);
-    std::optional<UpdateMetadata> GetLatestVersion(
-        const std::string& file_name);
-    std::vector<std::shared_ptr<File>> GetFileList(
-        const std::string& file_name);
-    bool DeleteFile(const std::string& file_name, uint32_t version,
-                    const Bytes& signature);
+                   uint64_t num_stripe, uint32_t version);
+    std::optional<UpdateMetadata> GetLatestVersion(const std::string& file_name);
+    std::vector<std::shared_ptr<File>> GetFileList(const std::string& file_name);
+    bool DeleteFile(const std::string& file_name, uint32_t version, const Bytes& signature);
     std::shared_ptr<File> operator[](const std::string& file_name);
 };
 
