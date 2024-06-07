@@ -313,6 +313,7 @@ int64_t BFRFileSystem::write(const std::string& path, const char *buf,
     if (!metadata.has_value()) {
         return -ENOENT;
     }
+    if (size == 0) return 0;
 
     /* Fist calculate the stripes to read. */
     const uint64_t startOffset = roundDown(offset, stripeSize_);
@@ -399,8 +400,9 @@ int64_t BFRFileSystem::write(const std::string& path, const char *buf,
                 }
                 return num_success >= success_threshold;
             }, "Write");
+        spdlog::debug("Write finished: {}", writeSuccess);
         if (writeSuccess) {
-            return 0;
+            return size;
         }
         for (int i = 0; i < numServers_; ++i) {
             if (success[i]) {
