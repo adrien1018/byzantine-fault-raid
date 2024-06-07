@@ -69,6 +69,9 @@ class BFRFileSystem final {
 
     // with trailing slash
     const std::string& GetPrefix() const { return prefix_; }
+    bool CheckPrefix(const std::string& path) const {
+        return path.size() > prefix_.size() && path.substr(0, prefix_.size()) == prefix_;
+    }
 
    private:
     std::vector<std::unique_ptr<Filesys::Stub>> servers_;

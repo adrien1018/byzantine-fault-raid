@@ -1,7 +1,9 @@
 /*
  * FUSE wrapper around the Byzantine Fault Raid file system.
  */
-
+#ifdef __INTELLISENSE__
+#define FUSE_USE_VERSION 31
+#endif
 #include <random>
 #include <fuse.h>
 #include <spdlog/spdlog.h>
@@ -13,13 +15,53 @@
 
 static_assert(sizeof(off_t) == 8, "off_t must be 64 bits");
 
-static std::unique_ptr<BFRFileSystem> bfrFs;
+namespace {
+
+std::unique_ptr<BFRFileSystem> bfrFs;
+std::map<std::string, size_t> directory_list;
+
+inline std::string Parent(const std::string &path) {
+    auto pos = path.find_last_of('/');
+    return pos == std::string::npos ? "" : path.substr(0, pos);
+}
+
+void UpdateDirectoryList(const std::unordered_set<std::string> &fileList) {
+    std::string prefix = bfrFs->GetPrefix();
+    prefix.pop_back();
+    directory_list[prefix] = 0;
+    for (auto& i : directory_list) i.second = 0;
+    // count file childs
+    for (const std::string& filename : fileList) {
+        std::string directory = filename;
+        for (size_t i = 0; directory.size(); i++) {
+            directory = Parent(directory);
+            if (i == 0) {
+                directory_list[directory]++;
+            } else {
+                // add directory so the last loop won't insert anything
+                directory_list[directory] = 0;
+            }
+        }
+    }
+    // add directory child count
+    for (const auto& dir : directory_list) {
+        if (dir.first.empty()) continue;
+        directory_list[Parent(dir.first)]++;
+    }
+}
+
+bool IsOwner(const std::string &path, bool include_self = false) {
+    if (include_self && path + '/' == bfrFs->GetPrefix()) {
+        return true;
+    }
+    return bfrFs->CheckPrefix(path);
+}
 
 /// FUSE
-static int bfr_unlink(const char *path) {
-    const char *bfrPath = path + 1;
-    spdlog::info("FUSE unlink: {}", bfrPath);
-    return bfrFs->unlink(bfrPath);
+int bfr_unlink(const char *path) {
+    std::string pathStr(path[0] ? path + 1 : path);
+    spdlog::info("FUSE unlink: {}", pathStr);
+    return bfrFs->unlink(pathStr);
 }
 
 #if FUSE_USE_VERSION >= 30
@@ -29,73 +71,84 @@ static int bfr_getattr(const char *path, struct stat *stbuf,
 static int bfr_getattr(const char *path, struct stat *stbuf)
 #endif
 {
-    // TODO: Reimplement for pk directories
+    std::string pathStr(path[0] ? path + 1 : path);
+    spdlog::info("FUSE getattr: {}", pathStr);
+
     memset(stbuf, 0, sizeof(struct stat));
-
-    if (strcmp(path, "/") == 0) {
-        spdlog::info("FUSE getattr: {}", path);
-        /* Root directory of our file system. */
-        const size_t numFiles = bfrFs->getFileList().size();
-        stbuf->st_mode = S_IFDIR | 0777;
-        stbuf->st_nlink = numFiles;
-        return 0;
+    // Check if it is a file
+    if (!pathStr.empty()) {
+        const std::optional<FileMetadata> metadata = bfrFs->open(pathStr);
+        if (metadata.has_value()) {
+            /* File exists in our file system. */
+            stbuf->st_mode = S_IFREG | (IsOwner(pathStr) ? 0644 : 0444);
+            stbuf->st_nlink = 1;
+            stbuf->st_size = metadata.value().fileSize;
+            stbuf->st_gid = getgid();
+            stbuf->st_uid = getuid();
+            return 0;
+        }
     }
 
-    const char *bfrPath = path + 1;  // Remove preceding '/'
-    spdlog::info("FUSE getattr: {}", bfrPath);
-    const std::optional<FileMetadata> metadata = bfrFs->open(bfrPath);
-    if (metadata.has_value()) {
-        /* File exists in our file system. */
-        stbuf->st_mode = S_IFREG | 0777;
-        stbuf->st_nlink = 1;
-        stbuf->st_size = metadata.value().fileSize;
+    // Directory
+    UpdateDirectoryList(bfrFs->getFileList());
+    if (auto it = directory_list.find(pathStr); it != directory_list.end()) {
+        stbuf->st_mode = S_IFDIR | (IsOwner(pathStr, true) ? 0755 : 0555);
+        stbuf->st_nlink = 2 + it->second;
+        stbuf->st_gid = getgid();
+        stbuf->st_uid = getuid();
         return 0;
-    } else {
-        /* File doesn't exist in our file system. */
-        return -ENOENT;
     }
+    return -ENOENT;
 }
 
-static int bfr_open(const char *path, struct fuse_file_info *info) {
-    const char *bfrPath = path + 1;  // Remove preceding '/'
-    spdlog::info("FUSE open: {}", bfrPath);
-    const std::optional<FileMetadata> metadata = bfrFs->open(bfrPath);
+int bfr_open(const char *path, struct fuse_file_info *info) {
+    std::string pathStr(path[0] ? path + 1 : path);
+    spdlog::info("FUSE open: {}", pathStr);
+    const std::optional<FileMetadata> metadata = bfrFs->open(pathStr);
     if (metadata.has_value()) {
         return 0;
     }
     if (info->flags & O_CREAT) {
-        return bfrFs->create(bfrPath);
+        return bfrFs->create(pathStr);
     }
     return -ENOENT;
 }
 
 // FUSE API does not support 64-bit.
-static int bfr_read(const char *path, char *buf, size_t size, off_t offset,
+int bfr_read(const char *path, char *buf, size_t size, off_t offset,
                     struct fuse_file_info *fi) {
-    const char *bfrPath = path + 1;
-    spdlog::info("FUSE read: {}", bfrPath);
-    return std::min(bfrFs->read(bfrPath, buf, size, offset),
+    std::string pathStr(path[0] ? path + 1 : path);
+    spdlog::info("FUSE read: {}", pathStr);
+    return std::min(bfrFs->read(pathStr, buf, size, offset),
                     (int64_t)std::numeric_limits<int>::max());
 }
 
 #if FUSE_USE_VERSION >= 30
-static int bfr_readdir(const char *path, void *buf, fuse_fill_dir_t filler_arg,
+int bfr_readdir(const char *path, void *buf, fuse_fill_dir_t filler_arg,
                        off_t offset, struct fuse_file_info *fi,
                        enum fuse_readdir_flags flags)
 #else
-static int bfr_readdir(const char *path, void *buf, fuse_fill_dir_t filler_arg,
+int bfr_readdir(const char *path, void *buf, fuse_fill_dir_t filler_arg,
                        off_t offset, struct fuse_file_info *fi)
 #endif
 {
-    // TODO: Reimplement for pk directories
-    spdlog::info("FUSE readdir: {}", path);
-    if (strcmp(path, "/") != 0) {
-        /* We only recognize the root directory. */
+    std::string pathStr(path[0] ? path + 1 : path);
+    spdlog::info("FUSE readdir: {}", pathStr);
+    auto fileList = bfrFs->getFileList();
+    UpdateDirectoryList(fileList);
+
+    for (auto& i : directory_list) {
+        spdlog::debug("dir: {} {}", i.first, i.second);
+    }
+
+    auto it = directory_list.find(pathStr);
+    if (it == directory_list.end()) {
         return -ENOENT;
     }
 
     auto filler = [&filler_arg](void *buf, const char *name,
                                 const struct stat *stbuf, off_t off) {
+        spdlog::debug("filler {}", name);
 #if FUSE_USE_VERSION >= 30
         return filler_arg(buf, name, stbuf, off, FUSE_FILL_DIR_PLUS);
 #else
@@ -103,46 +156,97 @@ static int bfr_readdir(const char *path, void *buf, fuse_fill_dir_t filler_arg,
 #endif
     };
 
-    filler(buf, ".", NULL, 0);  /* Current directory. */
-    filler(buf, "..", NULL, 0); /* Parent directory. */
-
-    const std::unordered_set<std::string> fileList = bfrFs->getFileList();
-    for (const std::string &filename : fileList) {
-        filler(buf, filename.c_str(), NULL, 0);
+    filler(buf, ".", nullptr, 0);  /* Current directory. */
+    filler(buf, "..", nullptr, 0); /* Parent directory. */
+    if (pathStr.size()) pathStr += '/';
+    for (auto& i : fileList) {
+        if (i.substr(0, pathStr.size()) != pathStr) continue;
+        std::string name = i.substr(pathStr.size());
+        if (name.find('/') == std::string::npos) {
+            filler(buf, name.c_str(), nullptr, 0);
+        }
     }
-
+    for (auto nit = directory_list.upper_bound(pathStr); nit != directory_list.end(); nit++) {
+        if (nit->first.substr(0, pathStr.size()) != pathStr) break;
+        std::string name = nit->first.substr(pathStr.size());
+        if (name.find('/') == std::string::npos) {
+            filler(buf, name.c_str(), nullptr, 0);
+        }
+    }
     return 0;
 }
 
-static int bfr_write(const char *path, const char *buf, size_t size,
+int bfr_write(const char *path, const char *buf, size_t size,
                      off_t offset, struct fuse_file_info *info) {
-    const char *bfrPath = path + 1;
-    spdlog::info("FUSE write: {}", bfrPath);
-    return std::min(bfrFs->write(bfrPath, buf, size, offset),
+    std::string pathStr(path[0] ? path + 1 : path);
+    spdlog::info("FUSE write: {}", pathStr);
+    return std::min(bfrFs->write(pathStr, buf, size, offset),
                     (int64_t)std::numeric_limits<int>::max());
 }
 
-static void bfr_destroy(void *private_data) {
+void bfr_destroy(void *private_data) {
     /* Called on filesystem exit. Clean up filesystem. */
     bfrFs.reset();
 }
 
-static int bfr_create(const char *path, mode_t mode,
+int bfr_create(const char *path, mode_t mode,
                       struct fuse_file_info *info) {
-    const char *bfrPath = path + 1;  // Remove preceding '/'
-    spdlog::info("FUSE create: {}", bfrPath);
-    return bfrFs->create(bfrPath);
+    std::string pathStr(path[0] ? path + 1 : path);
+    spdlog::info("FUSE create: {}", pathStr);
+    return bfrFs->create(pathStr);
 }
 
-static struct fuse_operations bfr_filesystem_operations = {
+int bfr_mkdir(const char* path, mode_t mode) {
+    std::string pathStr(path[0] ? path + 1 : path);
+    spdlog::info("FUSE mkdir: {}", pathStr);
+    if (!IsOwner(pathStr)) {
+        return -EACCES;
+    }
+    UpdateDirectoryList(bfrFs->getFileList());
+    auto parent = Parent(pathStr);
+    auto parent_it = directory_list.find(Parent(pathStr));
+    if (parent_it == directory_list.end()) {
+        return -ENOENT;
+    }
+    if (!directory_list.insert({pathStr, 0}).second) {
+        return -EEXIST;
+    }
+    parent_it->second++;
+    return 0;
+}
+
+int bfr_rmdir(const char* path) {
+    std::string pathStr(path[0] ? path + 1 : path);
+    spdlog::info("FUSE rmdir: {}", pathStr);
+    if (!IsOwner(pathStr)) {
+        return -EACCES;
+    }
+    UpdateDirectoryList(bfrFs->getFileList());
+    auto it = directory_list.find(pathStr);
+    if (it == directory_list.end()) {
+        return -ENOENT;
+    }
+    if (it->second != 0) {
+        return -ENOTEMPTY;
+    }
+    directory_list.erase(it);
+    directory_list[Parent(pathStr)]--;
+    return 0;
+}
+
+struct fuse_operations bfr_filesystem_operations = {
     .getattr = bfr_getattr,
+    .mkdir = bfr_mkdir,
     .unlink = bfr_unlink,
+    .rmdir = bfr_rmdir,
     .open = bfr_open,
     .read = bfr_read,
     .write = bfr_write,
     .readdir = bfr_readdir,
     .destroy = bfr_destroy,
     .create = bfr_create};
+
+}  // namespace
 
 
 int main(int argc, char **argv) {

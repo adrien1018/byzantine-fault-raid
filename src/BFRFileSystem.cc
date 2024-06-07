@@ -229,7 +229,7 @@ std::unordered_set<std::string> BFRFileSystem::getFileList() const {
 
 int BFRFileSystem::create(const std::string& path) const {
     spdlog::info("Start create {}", path);
-    if (path.size() <= prefix_.size() || path.substr(0, prefix_.size()) != prefix_) {
+    if (!CheckPrefix(path)) {
         return -EINVAL;
     }
     const std::optional<FileMetadata> metadata = QueryMetadata_(path, true);
@@ -305,6 +305,9 @@ int64_t BFRFileSystem::read(const std::string& path, char *buf, size_t size,
 int64_t BFRFileSystem::write(const std::string& path, const char *buf,
                              const size_t size, const off_t offset) const {
     spdlog::info("Start write {} offset={} size={}", path, offset, size);
+    if (!CheckPrefix(path)) {
+        return -EINVAL;
+    }
     /* Open file to get metadata. */
     const std::optional<FileMetadata> metadata = this->QueryMetadata_(path);
     if (!metadata.has_value()) {
@@ -414,6 +417,9 @@ int64_t BFRFileSystem::write(const std::string& path, const char *buf,
 
 int BFRFileSystem::unlink(const std::string& path) const {
     spdlog::info("Start unlink {}", path);
+    if (!CheckPrefix(path)) {
+        return -EINVAL;
+    }
     /* Open file to get metadata. */
     const std::optional<FileMetadata> metadata = this->QueryMetadata_(path);
     if (!metadata.has_value()) {
