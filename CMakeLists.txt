@@ -46,6 +46,11 @@ FetchContent_MakeAvailable_Exclude(spdlog cli11 tomlplusplus)
 
 find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
+find_package(OpenMP)
+
+if(OPENMP_FOUND)
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
+endif()
 
 if (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
   pkg_search_module(FUSE REQUIRED fuse)

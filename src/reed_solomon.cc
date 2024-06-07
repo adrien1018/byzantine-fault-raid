@@ -134,9 +134,10 @@ std::vector<Bytes> RSEncode(uint8_t N, uint8_t D, size_t blocks, const uint8_t i
   for (uint8_t j = 0; j < deg; j++) {
     memcpy(out[j].data(), in + j * blocks, blocks);
   }
-  std::vector<GFInt> table_x(deg);
 
+#pragma omp parallel for
   for (uint8_t x = deg; x < N; x++) {
+    std::vector<GFInt> table_x(deg);
     for (uint8_t j = 0; j < deg; j++) table_x[j] = table[j] / (GFInt(x) - GFInt(j));
     RSLoop(blocks, deg, table_x, ls[x-deg], [&](uint8_t j) { return in + j * blocks; }, out[x].data());
   }
@@ -170,9 +171,12 @@ bool RSDecode(uint8_t N, uint8_t D, size_t blocks, const std::vector<Bytes>& in,
   for (uint8_t i = 0; i < err_pos.size(); i++) {
     for (uint8_t k = 0; k < deg; k++) ls[i] *= GFInt(err_pos[i]) - GFInt(pos[k]);
   }
-  std::vector<GFInt> table_x(deg);
-  for (uint8_t j = 0; j < err_pos.size(); j++) {
+
+  uint8_t sz = err_pos.size();
+#pragma omp parallel for
+  for (uint8_t j = 0; j < sz; j++) {
     uint8_t x = err_pos[j];
+    std::vector<GFInt> table_x(deg);
     for (uint8_t k = 0; k < deg; k++) table_x[k] = table[k] / (GFInt(x) - GFInt(pos[k]));
     RSLoop(blocks, deg, table_x, ls[j], [&](uint8_t k) { return in[pos[k]].data(); }, out + x * blocks);
   }

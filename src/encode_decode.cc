@@ -53,6 +53,7 @@ std::vector<Bytes> Encode(
 
   // signing loop
   Bytes signatures(SigningKey::kSignatureSize * n);
+#pragma omp parallel for
   for (int block_id = 0; block_id < n; block_id++) {
     Bytes& block = blocks[block_id];
     // signed data: concat(block, block_id, metadata)
