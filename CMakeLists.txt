@@ -81,6 +81,7 @@ link_directories(${FUSE_LIBRARY_DIRS})
 file(GLOB filesys_src CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/*.cc")
 list(REMOVE_ITEM filesys_src
     "${CMAKE_SOURCE_DIR}/src/filesys_server.cc"
+    "${CMAKE_SOURCE_DIR}/src/filesys_server_impl.cc"
     "${CMAKE_SOURCE_DIR}/src/filesys_client.cc"
     "${CMAKE_SOURCE_DIR}/src/data_storage_test.cc"
     "${CMAKE_SOURCE_DIR}/src/BFRFileSystem.cc")
@@ -104,8 +105,12 @@ add_executable(BFRFileSystem "${CMAKE_SOURCE_DIR}/src/BFRFileSystem.cc")
 target_link_libraries(BFRFileSystem ${COMMON_LIBRARIES})
 
 # Targets filesys_(client|server)
-add_executable(filesys_server "${CMAKE_SOURCE_DIR}/src/filesys_server.cc")
-add_executable(filesys_client "${CMAKE_SOURCE_DIR}/src/filesys_client.cc" "${CMAKE_SOURCE_DIR}/src/BFRFileSystem.cc")
+add_executable(filesys_server
+    "${CMAKE_SOURCE_DIR}/src/filesys_server.cc"
+    "${CMAKE_SOURCE_DIR}/src/filesys_server_impl.cc")
+add_executable(filesys_client
+    "${CMAKE_SOURCE_DIR}/src/filesys_client.cc"
+    "${CMAKE_SOURCE_DIR}/src/BFRFileSystem.cc")
 target_link_libraries(filesys_server ${COMMON_LIBRARIES})
 target_link_libraries(filesys_client ${COMMON_LIBRARIES} ${FUSE_LIBRARIES})
 
