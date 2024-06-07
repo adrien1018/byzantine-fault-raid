@@ -35,6 +35,10 @@ FilesysImpl::FilesysImpl(
         : _config(config),
           _data_storage(local_storage, config.servers.size(), config.block_size),
           _server_idx(server_idx) {
+    for (const auto& file : _data_storage.GetFileList("")) {
+        _seen_public_keys.insert(file->PublicKey());
+    }
+
     for (uint32_t i = 0; i < config.servers.size(); i++) {
         if (i == server_idx) {
             continue;
@@ -53,6 +57,10 @@ Status FilesysImpl::CreateFile(
     spdlog::info("Server {}: Create {} version={}", _server_idx, args->file_name(), args->version());
     if (_data_storage.CreateFile(
             args->file_name(), args->version(), StrToBytes(args->version_signature()))) {
+        std::lock_guard<std::mutex> lock(_mu);
+        Bytes public_key = GetPublicKeyFromPath(args->file_name());
+        _seen_public_keys.insert(public_key);
+        _heartbeat_new_files.erase(public_key);
         return Status::OK;
     } else {
         return grpc::Status(grpc::StatusCode::ALREADY_EXISTS,
@@ -139,7 +147,31 @@ Status FilesysImpl::GetFileList(ServerContext* context, const GetFileListArgs* a
 
 Status FilesysImpl::GetUpdateLog(ServerContext* context, const GetUpdateLogArgs* args,
                     GetUpdateLogReply* reply) {
-    // Only OK if target version is reached
+    spdlog::info("Server {}: GetUpdateLog {} after={} target={}",
+                 _server_idx, args->file_name(), args->after_version(),
+                 args->target_version());
+    auto file = _data_storage[args->file_name()];
+    if (file == nullptr) {
+        return grpc::Status(grpc::StatusCode::NOT_FOUND, "File not found.");
+    }
+    std::lock_guard<std::mutex> lock(file->Mutex());
+    UpdateMetadata file_last_update = file->LastUpdate();
+    if (file_last_update.version < args->target_version()) {
+        return grpc::Status(grpc::StatusCode::NOT_FOUND, "Version not reached.");
+    }
+
+    auto update_log = file->GetUpdateLog(args->after_version());
+    for (const auto& metadata : update_log) {
+        filesys::UpdateMetadata* update_metadata = reply->add_log();
+        ToUpdateMetadata(*update_metadata, metadata);
+    }
+
+    FileInfo* file_info = reply->mutable_info();
+    file_info->set_file_name(file->FileName());
+    file_info->set_public_key(BytesToStr(file->PublicKey()));
+    ToUpdateMetadata(*file_info->mutable_last_update(), file_last_update);
+    file_info->set_start_version(file->StartVersion());
+
     return Status::OK;
 }
 
@@ -167,12 +199,16 @@ void FilesysImpl::HeartBeatThread() {
                 if (!tried[i]) servers.emplace_back(i);
             }
             tried.assign(_peers.size(), 0);
+            tried[_server_idx] = 1;
             tried_count = 1;
         }
         if (servers.size() < num_peers) {
+            std::vector<uint8_t> in_list(_peers.size());
+            for (auto& i : servers) in_list[i] = 1;
+            in_list[_server_idx] = 1;
             std::vector<int> options;
             for (size_t i = 0; i < _peers.size(); i++) {
-                if (!tried[i]) options.emplace_back(i);
+                if (!in_list[i] && !tried[i]) options.emplace_back(i);
             }
             std::shuffle(options.begin(), options.end(), _rng);
             options.resize(num_peers - servers.size());
@@ -200,24 +236,40 @@ void FilesysImpl::HeartBeat(const std::vector<int>& peer_idx) {
             const std::vector<uint8_t>& replied,
             size_t& minimum_success) -> bool {
             std::unordered_map<std::string, uint32_t> file_versions;
-            for (uint32_t i = 0; i < replied.size(); i++) {
-                if (!replied[i] || !responses[i].status.ok()) continue;
-                const auto& files = responses[i].reply.files();
-                for (auto& file : files) {
-                    if (!VerifyUpdateSignature(file.last_update(), file.file_name(),
-                                               file.public_key())) {
-                        continue;
+            {
+                std::lock_guard<std::mutex> lock(_mu);
+                for (uint32_t i = 0; i < replied.size(); i++) {
+                    if (!replied[i] || !responses[i].status.ok()) continue;
+                    const auto& files = responses[i].reply.files();
+                    for (auto& file : files) {
+                        Bytes public_key = StrToBytes(file.public_key());
+                        if (!VerifyUpdateSignature(file.last_update(), file.file_name(), public_key)) {
+                            continue;
+                        }
+                        std::string file_name = file.file_name();
+                        bool ok = false;
+                        if (_seen_public_keys.count(public_key)) {
+                            ok = true;
+                        } else {
+                            auto& entry = _heartbeat_new_files[public_key][file_name];
+                            entry.insert(peer_idx[i]);
+                            if (entry.size() >= _config.num_malicious + 1) {
+                                _seen_public_keys.insert(public_key);
+                                _heartbeat_new_files.erase(public_key);
+                                ok = true;
+                            }
+                        }
+                        if (ok) {
+                            auto& file_version = file_versions[file_name];
+                            file_version = std::max(file_version, file.last_update().version());
+                        }
                     }
-                    std::string file_name = file.file_name();
-                    auto& file_version = file_versions[file_name];
-                    file_version = std::max(file_version, file.last_update().version());
                 }
             }
 
             for (auto& [file_name, target_version] : file_versions) {
                 if (_data_storage.GetLatestVersion(file_name).value().version < target_version) {
-                    // TODO: use thread pool?
-                    std::thread([this, file_name = file_name, target_version]() {
+                    _thread_pool.detach_task([this, file_name = file_name, target_version]() {
                         // Wait for possible write to come.
                         std::this_thread::sleep_for(15s);
                         uint32_t current_version =
@@ -225,7 +277,7 @@ void FilesysImpl::HeartBeat(const std::vector<int>& peer_idx) {
                         if (current_version < target_version) {
                             Recovery(file_name, current_version, target_version);
                         }
-                    }).detach();
+                    });
                 }
             }
             return true;

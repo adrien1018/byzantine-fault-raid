@@ -5,6 +5,7 @@
 
 #include "config.h"
 #include "data_storage.h"
+#include "thread_pool.hpp"
 #include "filesys.grpc.pb.h"
 
 using filesys::CreateFileArgs;
@@ -29,6 +30,11 @@ class FilesysImpl final : public Filesys::Service {
     uint32_t _server_idx;
     std::vector<Filesys::Stub*> _peers;
     std::mt19937_64 _rng;
+    BS::thread_pool _thread_pool;
+
+    std::mutex _mu;
+    std::unordered_set<Bytes> _seen_public_keys;
+    std::unordered_map<Bytes, std::unordered_map<std::string, std::unordered_set<uint32_t>>> _heartbeat_new_files;
 
    public:
     explicit FilesysImpl(const Config& config, const fs::path& local_storage,

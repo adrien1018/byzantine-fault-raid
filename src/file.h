@@ -85,6 +85,7 @@ class File {
     std::string FileName() const;
     UpdateMetadata LastUpdate() const;
     uint32_t StartVersion() const;
+    std::vector<UpdateMetadata> GetUpdateLog(uint32_t start_version);
 };
 
 #endif

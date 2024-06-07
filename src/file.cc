@@ -499,3 +499,12 @@ UpdateMetadata File::LastUpdate() const {
 }
 
 uint32_t File::StartVersion() const { return _start_version; }
+
+std::vector<UpdateMetadata> File::GetUpdateLog(uint32_t start_version) {
+    std::vector<UpdateMetadata> log;
+    for (auto it = _update_record.lower_bound(start_version);
+         it != _update_record.end(); ++it) {
+        log.push_back(it->second.metadata);
+    }
+    return log;
+}
