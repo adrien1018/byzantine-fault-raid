@@ -29,6 +29,7 @@ static int bfr_getattr(const char *path, struct stat *stbuf,
 static int bfr_getattr(const char *path, struct stat *stbuf)
 #endif
 {
+    // TODO: Reimplement for pk directories
     memset(stbuf, 0, sizeof(struct stat));
 
     if (strcmp(path, "/") == 0) {
@@ -86,6 +87,7 @@ static int bfr_readdir(const char *path, void *buf, fuse_fill_dir_t filler_arg,
                        off_t offset, struct fuse_file_info *fi)
 #endif
 {
+    // TODO: Reimplement for pk directories
     spdlog::info("FUSE readdir: {}", path);
     if (strcmp(path, "/") != 0) {
         /* We only recognize the root directory. */

@@ -296,9 +296,9 @@ int64_t BFRFileSystem::read(const std::string& path, char *buf, size_t size,
         .count = size,
         .out = buf,
     }};
-    std::vector<int64_t> bytesRead = MultiRead(
+    std::vector<int64_t> bytesRead = MultiReadOrReconstruct(
         QueryServers_(), path, metadata.value().fileSize, std::move(range),
-        metadata.value().version, numFaulty_, blockSize_, -1, timeout_);
+        metadata.value().version, numFaulty_, blockSize_, timeout_);
     return bytesRead[0];
 }
 
