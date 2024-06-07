@@ -14,8 +14,8 @@ using namespace std::chrono_literals;
 /* Persisting the record on disk. The format is:
     |version (4 bytes)|stripe_offset (8 bytes)|num_stripes (8 bytes)
     |is_delete (1 byte)|signature (64 bytes)
-    |stripe_size (8 bytes)|metadata_file_size (8 bytes)|has_image (1 byte)
-    |buffer_size(8 bytes)|block_data (variable size)| */
+    |stripe_size (8 bytes)|metadat
+    ta (variable size)| */
 
 UndoRecord UndoRecord::ReadFromFile(std::ifstream& ifs) {
     UndoRecord record;
@@ -329,7 +329,7 @@ bool File::Recreate(uint32_t version, const Bytes& signature) {
         .num_stripes = 0,
         .file_size = 0,
         .is_delete = true,
-        .signature = Bytes(SigningKey::kSignatureSize),
+        .signature = signature,
     });
     WriteMetadata();
     return true;

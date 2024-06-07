@@ -9,6 +9,8 @@
 #include <vector>
 
 #include "filesys.grpc.pb.h"
+
+#include "config.h"
 #include "signature.h"
 
 using filesys::Filesys;
@@ -24,9 +26,7 @@ class BFRFileSystem final {
     /*
      * Initializes connections to servers; loads signing key.
      */
-    BFRFileSystem(const std::vector<std::string> &serverAddresses,
-                  const int numMalicious, const int numFaulty,
-                  const int blockSize, const std::string &signing_key_path);
+    BFRFileSystem(const Config& config, const std::string &signing_key_path);
 
 
     /*

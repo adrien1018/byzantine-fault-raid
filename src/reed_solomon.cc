@@ -4,8 +4,6 @@
 #include <cstring>
 #include <algorithm>
 
-#include "signature.h"
-
 namespace {
 
 constexpr uint8_t kExpTable[] = {
@@ -101,6 +99,25 @@ std::vector<GFInt> ComputeDecodeTable(const std::vector<uint8_t>& pos) {
   return x;
 }
 
+template <class InFunc>
+inline void RSLoop(size_t blocks, uint8_t deg, const std::vector<GFInt>& table_x, GFInt ls, InFunc in, uint8_t* out) {
+  constexpr size_t kBlock = 64;
+  for (size_t bi = 0; bi < blocks; bi += kBlock) {
+    alignas(32) GFInt sum[kBlock], ins[kBlock];
+    memset(sum, 0, sizeof(sum));
+    memset(ins, 0, sizeof(ins));
+    size_t p = std::min(kBlock, blocks - bi);
+    for (uint8_t j = 0; j < deg; j++) {
+      memcpy(ins, in(j) + bi, p);
+#pragma GCC unroll 8
+      for (size_t i = 0; i < kBlock; i++) sum[i] += table_x[j] * ins[i];
+    }
+    for (size_t ni = 0, i = bi; ni < p; ni++, i++) {
+      out[i] = ls * sum[ni];
+    }
+  }
+}
+
 } // namespace
 
 #pragma GCC diagnostic ignored "-Wclass-memaccess"
@@ -121,54 +138,13 @@ std::vector<Bytes> RSEncode(uint8_t N, uint8_t D, size_t blocks, const uint8_t i
   constexpr size_t kBlock = 64;
   for (uint8_t x = deg; x < N; x++) {
     for (uint8_t j = 0; j < deg; j++) table_x[j] = table[j] / (GFInt(x) - GFInt(j));
-    for (size_t bi = 0; bi < blocks; bi += kBlock) {
-      alignas(32) GFInt sum[kBlock], ins[kBlock];
-      memset(sum, 0, sizeof(sum));
-      size_t p = std::min(kBlock, blocks - bi);
-      for (uint8_t j = 0; j < deg; j++) {
-        memcpy(ins, in + j * blocks + bi, p);
-#pragma GCC unroll 8
-        for (size_t i = 0; i < kBlock; i++) sum[i] += table_x[j] * ins[i];
-      }
-      for (size_t ni = 0, i = bi; ni < p; ni++, i++) {
-        out[x][i] = ls[x-deg] * sum[ni];
-      }
-    }
+    RSLoop(blocks, deg, table_x, ls[x-deg], [&](uint8_t j) { return in + j * blocks; }, out[x].data());
   }
   return out;
 }
 
-Bytes RSEncodeOneBlock(uint8_t N, uint8_t D, size_t blocks, const uint8_t in[], uint8_t block_id) {
-  uint8_t deg = N-D;
-  Bytes out(blocks);
-  if (block_id < deg) {
-    memcpy(out.data(), in + block_id * blocks, blocks);
-    return out;
-  }
-  auto table = ComputeEncodeTable(deg);
-  GFInt ls(1);
-  for (uint8_t j = 0; j < deg; j++) ls *= GFInt(block_id) - GFInt(j);
-  std::vector<GFInt> ins(deg);
-  std::vector<GFInt> table_x(deg);
-  constexpr size_t kBlock = 64;
-  for (uint8_t j = 0; j < deg; j++) table_x[j] = table[j] / (GFInt(block_id) - GFInt(j));
-  for (size_t bi = 0; bi < blocks; bi += kBlock) {
-    alignas(32) GFInt sum[kBlock], ins[kBlock];
-    memset(sum, 0, sizeof(sum));
-    size_t p = std::min(kBlock, blocks - bi);
-    for (uint8_t j = 0; j < deg; j++) {
-      memcpy(ins, in + j * blocks + bi, p);
-#pragma GCC unroll 8
-      for (size_t i = 0; i < kBlock; i++) sum[i] += table_x[j] * ins[i];
-    }
-    for (size_t ni = 0, i = bi; ni < p; ni++, i++) {
-      out[i] = ls * sum[ni];
-    }
-  }
-  return out;
-}
-
-bool RSDecode(uint8_t N, uint8_t D, size_t blocks, const std::vector<Bytes>& in, const bool err[], uint8_t out[]) {
+bool RSDecode(uint8_t N, uint8_t D, size_t blocks, const std::vector<Bytes>& in,
+              const bool err[], uint8_t out[]) {
   uint8_t deg = N-D;
   size_t errs = std::count_if(err, err + deg, [](bool x){ return x; });
   for (uint8_t j = 0; j < deg; j++) {
@@ -199,20 +175,32 @@ bool RSDecode(uint8_t N, uint8_t D, size_t blocks, const std::vector<Bytes>& in,
   for (uint8_t j = 0; j < err_pos.size(); j++) {
     uint8_t x = err_pos[j];
     for (uint8_t k = 0; k < deg; k++) table_x[k] = table[k] / (GFInt(x) - GFInt(pos[k]));
-    for (size_t bi = 0; bi < blocks; bi += kBlock) {
-      alignas(32) GFInt sum[kBlock], ins[kBlock];
-      memset(sum, 0, sizeof(sum));
-      size_t p = std::min(kBlock, blocks - bi);
-      for (uint8_t k = 0; k < deg; k++) {
-        memcpy(ins, in[pos[k]].data() + bi, p);
-#pragma GCC unroll 8
-        for (size_t i = 0; i < kBlock; i++) sum[i] += table_x[k] * ins[i];
-      }
-      for (size_t ni = 0, i = bi; ni < p; ni++, i++) {
-        out[x * blocks + i] = ls[j] * sum[ni];
-      }
-    }
+    RSLoop(blocks, deg, table_x, ls[j], [&](uint8_t k) { return in[pos[k]].data(); }, out + x * blocks);
   }
+  return true;
+}
+
+bool RSReconstruct(uint8_t N, uint8_t D, size_t blocks, const std::vector<Bytes>& in,
+                      const bool err[], uint8_t block_id, uint8_t out[]) {
+  if (!err[block_id]) {
+    memcpy(out, in[block_id].data(), blocks);
+    return true;
+  }
+  uint8_t deg = N-D;
+  std::vector<uint8_t> pos;
+  pos.reserve(deg);
+  for (uint8_t i = 0; i < N && pos.size() < deg; i++) {
+    if (!err[i]) pos.push_back(i);
+  }
+  if (pos.size() < deg) return false;
+  auto table = ComputeDecodeTable(pos);
+  GFInt ls(1);
+  for (uint8_t k = 0; k < deg; k++) ls *= GFInt(block_id) - GFInt(pos[k]);
+  std::vector<GFInt> table_x(deg);
+  constexpr size_t kBlock = 64;
+  uint8_t x = block_id;
+  for (uint8_t k = 0; k < deg; k++) table_x[k] = table[k] / (GFInt(x) - GFInt(pos[k]));
+  RSLoop(blocks, deg, table_x, ls, [&](uint8_t k) { return in[pos[k]].data(); }, out);
   return true;
 }
 
@@ -245,7 +233,7 @@ int main() {
     int D = N/2;
 
     int C = 1 * 1024 * 1024 / (N-D);
-    //int C = 1;
+    //int C = 4;
     std::vector<uint8_t> data((N-D)*C), res((N-D)*C);
     bool err_vec[256] = {};
     for (auto& i : data) i = gen();
@@ -254,6 +242,18 @@ int main() {
     auto encode = RSEncode(N, D, C, data.data());
     auto end = steady_clock::now();
     double encode_time = duration<double>(end - start).count();
+
+    for (int i = 0; i < N; i++) {
+      // remove i-th block and check if RSReconstruct works
+      auto n_encode = encode;
+      n_encode[i].clear();
+      std::vector<uint8_t> recon(C);
+      err_vec[i] = true;
+      bool st = RSReconstruct(N, D, C, n_encode, err_vec, i, recon.data());
+      if (!st) throw;
+      if (recon != encode[i]) throw;
+      memset(err_vec, 0, sizeof(err_vec));
+    }
 
     std::vector<uint8_t> errs;
     start = steady_clock::now();
