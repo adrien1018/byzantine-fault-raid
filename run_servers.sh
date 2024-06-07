@@ -1,3 +1,5 @@
+trap 'pkill -9 filesys_server' EXIT
+
 pkill -9 filesys_server
 sleep 0.5
 pkill -9 filesys_server

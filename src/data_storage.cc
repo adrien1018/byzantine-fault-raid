@@ -3,8 +3,12 @@
 #include <algorithm>
 #include <iostream>
 
-DataStorage::DataStorage(const fs::path& storage_directory, int n_servers, uint32_t block_size)
-    : _storage_directory(storage_directory), _n_servers(n_servers), _block_size(block_size) {
+DataStorage::DataStorage(const fs::path& storage_directory, int n_servers,
+                         uint32_t block_size, uint32_t raw_stripe_size) :
+    _storage_directory(storage_directory),
+    _n_servers(n_servers),
+    _block_size(block_size),
+    _raw_stripe_size(raw_stripe_size) {
     std::error_code ec;
     /* If directory already existed then nothing happens. */
     fs::create_directory(_storage_directory, ec);
@@ -15,7 +19,7 @@ DataStorage::DataStorage(const fs::path& storage_directory, int n_servers, uint3
             std::string file_name = PathDecode(entry.path().filename());
             _file_list.emplace(
                 file_name,
-                new File(_storage_directory, file_name, _n_servers, _block_size));
+                new File(_storage_directory, file_name, _n_servers, _block_size, _raw_stripe_size));
         }
     }
 }
@@ -29,7 +33,7 @@ bool DataStorage::CreateFile(const std::string& file_name,
     }
     try {
         _file_list.emplace(file_name, new File(
-            _storage_directory, file_name, signature, _n_servers, _block_size));
+            _storage_directory, file_name, signature, _n_servers, _block_size, _raw_stripe_size));
     } catch (const std::runtime_error& e) {
         return false;
     }

@@ -52,26 +52,29 @@ class File {
     std::fstream _file_stream;
     std::atomic<bool> _file_closed;
     std::thread _garbage_collection;
-    const uint32_t _block_size;
+    const uint32_t _block_size, _raw_stripe_size;
 
-    fs::path UndoLogDirectory() const;
-    fs::path UndoLogPath(uint32_t version) const;
-    std::set<Segment> ReconstructVersion(uint32_t version);
-    UndoRecord CreateUndoRecord(const UpdateMetadata& metadata);
-    void GarbageCollectRecord();
-    uint64_t GetCurrentStripeSize();
-    void LoadUndoRecords(const std::string& log_directory);
-    UndoRecord LoadUndoRecord(const std::string& record_path);
-    void WriteMetadata();
+    fs::path _UndoLogDirectory() const;
+    fs::path _UndoLogPath(uint32_t version) const;
+    fs::path _FilePath() const;
+    std::set<Segment> _ReconstructVersion(uint32_t version);
+    UndoRecord _CreateUndoRecord(const UpdateMetadata& metadata, bool current = true);
+    void _ClearUndoRecordImage(UndoRecord& record);
+    void _GarbageCollectRecord();
+    uint64_t _GetCurrentStripeSize();
+    void _LoadUndoRecords(const std::string& log_directory);
+    UndoRecord _LoadUndoRecord(const std::string& record_path);
+    void _WriteMetadata();
 
     uint32_t _version() const;
     bool _deleted() const;
 
    public:
     File(const std::string& directory, const std::string& file_name,
-         const Bytes& version_signature, int n_servers, uint32_t block_size);
+         const Bytes& version_signature, int n_servers,
+         uint32_t block_size, uint32_t raw_stripe_size);
     File(const std::string& directory, const std::string& file_name,
-         int n_servers, uint32_t block_size);
+         int n_servers, uint32_t block_size, uint32_t raw_stripe_size);
     ~File();
     std::mutex& Mutex() { return _mu; }
     // obtain the mutex before doing any the following operations
@@ -81,6 +84,12 @@ class File {
                       uint64_t num_stripes);
     bool Delete(uint32_t version, const Bytes& signature);
     bool Recreate(uint32_t version, const Bytes& signature);
+    bool UpdateUndoLogAndFile(
+        const std::map<uint32_t, UpdateMetadata>& update_log,
+        const std::set<std::pair<uint64_t, uint64_t>>& segments,
+        const std::vector<Bytes>& reconstructed_blocks);
+
+
     Bytes PublicKey() const;
     std::string FileName() const;
     UpdateMetadata LastUpdate() const;

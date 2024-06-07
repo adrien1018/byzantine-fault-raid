@@ -29,7 +29,7 @@ std::vector<int64_t> MultiReadOrReconstruct(
   const uint32_t num_servers = peers.size();
   const size_t stripe_size = GetStripeSize(block_size, num_servers, num_faulty);
 
-  std::vector<int64_t> ret(ranges.size());
+  std::vector<int64_t> ret(ranges.size(), -EIO);
 
   filesys::ReadBlocksArgs args;
   args.set_file_name(filename);
@@ -42,6 +42,7 @@ std::vector<int64_t> MultiReadOrReconstruct(
     auto& range = ranges[i];
     if (range.offset >= file_size) {
       range.count = 0;
+      ret[i] = 0;
       continue;
     }
     idx.push_back(i);
@@ -70,7 +71,7 @@ std::vector<int64_t> MultiReadOrReconstruct(
   if (reconstruct_server != -1) {
     peers.erase(peers.begin() + reconstruct_server);
   }
-  bool success = QueryServers<filesys::ReadBlocksReply>(
+  QueryServers<filesys::ReadBlocksReply>(
       peers, args, &filesys::Filesys::Stub::AsyncReadBlocks,
       num_servers - num_faulty, 100ms, timeout,
       [&](const std::vector<AsyncResponse<filesys::ReadBlocksReply>> &responses,
@@ -108,6 +109,7 @@ std::vector<int64_t> MultiReadOrReconstruct(
           num_success++;
         }
 
+        std::vector<int64_t> nret = ret;
         try {
           for (size_t range_id = 0; range_id < idx.size(); ++range_id) {
             auto& range = ranges[idx[range_id]];
@@ -138,8 +140,10 @@ std::vector<int64_t> MultiReadOrReconstruct(
             }
             if (reconstruct_server == -1) {
               memcpy(range.out, bytesRead.data() + range_metas[range_id].offsetDiff, range.count);
+              nret[idx[range_id]] = range.count;
             } else {
               memcpy(range.out, bytesRead.data(), bytesRead.size());
+              nret[idx[range_id]] = bytesRead.size();
             }
           }
         } catch (DecodeError &e) {
@@ -148,11 +152,9 @@ std::vector<int64_t> MultiReadOrReconstruct(
           exit(1);
           return false;
         }
+        ret = nret;
         return true;
       }, "Read");
 
-  for (size_t i = 0; i < idx.size(); ++i) {
-    ret[idx[i]] = success ? ranges[idx[i]].count : -EIO;
-  }
   return ret;
 }

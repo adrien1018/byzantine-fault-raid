@@ -44,7 +44,8 @@ UpdateMetadata ToUpdateMetadata(const filesys::UpdateMetadata& metadata) {
 FilesysImpl::FilesysImpl(
     const Config& config, const fs::path& local_storage, uint32_t server_idx)
         : _config(config),
-          _data_storage(local_storage, config.servers.size(), config.block_size),
+          _data_storage(local_storage, config.servers.size(), config.block_size,
+                        GetStripeSize(config.block_size, config.servers.size(), config.num_malicious)),
           _server_idx(server_idx) {
     for (const auto& file : _data_storage.GetFileList("")) {
         _seen_public_keys.insert(file->PublicKey());
@@ -61,7 +62,7 @@ FilesysImpl::FilesysImpl(
         _peers.emplace_back(Filesys::NewStub(channel).release());
     }
 
-    // std::thread(&FilesysImpl::HeartBeat, this).detach();
+    std::thread(&FilesysImpl::HeartBeatThread, this).detach();
 }
 
 Status FilesysImpl::CreateFile(
@@ -125,6 +126,7 @@ Status FilesysImpl::WriteBlocks(ServerContext* context, const WriteBlocksArgs* a
         return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
                             "Invalid version.");
     }
+    spdlog::info("Server {}: Write success", _server_idx);
     return Status::OK;
 }
 
@@ -223,7 +225,7 @@ void FilesysImpl::HeartBeat(const std::vector<int>& peer_idx) {
     for (auto& i : peer_idx) peers.emplace_back(_peers[i]);
 
     QueryServers<GetFileListReply>(
-        peers, args, &Filesys::Stub::PrepareAsyncGetFileList,
+        peers, args, &Filesys::Stub::AsyncGetFileList,
         0, 10s, 10s,
         [&](const std::vector<AsyncResponse<GetFileListReply>>& responses,
             const std::vector<uint8_t>& replied,
@@ -282,6 +284,7 @@ void FilesysImpl::Recovery(
     if (!lock.owns_lock()) return;
 
     const size_t stripe_size = GetStripeSize(_config.block_size, _config.servers.size(), _config.num_malicious);
+    Bytes public_key = GetPublicKeyFromPath(file_name);
 
     GetUpdateLogArgs args;
     args.set_file_name(file_name);
@@ -289,10 +292,12 @@ void FilesysImpl::Recovery(
     std::map<uint32_t, UpdateMetadata> update_log;
     std::set<std::pair<uint64_t, uint64_t>> segments;
     std::vector<Bytes> reconstructed_blocks;
-    bool is_deleted = false;
     while (true) {
+        reconstructed_blocks.clear();
+        segments.clear();
+
         bool success = QueryServers<GetUpdateLogReply>(
-            _peers, args, &Filesys::Stub::PrepareAsyncGetUpdateLog,
+            _peers, args, &Filesys::Stub::AsyncGetUpdateLog,
             _config.num_malicious + 1, 1s, 10s,
             [&](const std::vector<AsyncResponse<GetUpdateLogReply>>& responses,
                 const std::vector<uint8_t>& replied,
@@ -302,6 +307,7 @@ void FilesysImpl::Recovery(
                     if (!replied[i] || !responses[i].status.ok()) continue;
                     const auto& log = responses[i].reply.log();
                     for (const auto& metadata : log) {
+                        if (!VerifyUpdateSignature(metadata, file_name, public_key)) break;
                         update_log[metadata.version()] = ToUpdateMetadata(metadata);
                     }
                 }
@@ -313,18 +319,18 @@ void FilesysImpl::Recovery(
             continue;
         }
         uint32_t target_version = update_log.rbegin()->first;
+        uint64_t latest_size = update_log.rbegin()->second.file_size;
+        uint64_t latest_stripes = (latest_size + stripe_size - 1) / stripe_size;
         if (update_log.rbegin()->second.is_delete) {
             // file deleted
-            is_deleted = true;
             break;
         }
         // merge segments
-        segments.clear();
         for (uint32_t version = target_version; version > current_version; version--) {
             auto update_it = update_log.find(version);
             if (update_it == update_log.end()) {
                 // update log incomplete; assume all blocks are lost
-                segments.insert({0, (update_log.rbegin()->second.file_size + stripe_size - 1) / stripe_size});
+                segments.insert({0, latest_stripes});
                 break;
             }
             auto& metadata = update_log[version];
@@ -353,10 +359,54 @@ void FilesysImpl::Recovery(
                 it = segments.insert(new_segment).first;
             }
         }
-        // TODO: read file for each segment; retry if fail
+        // this should not happen, but just in case
+        while (segments.rbegin()->first >= latest_stripes) {
+            spdlog::warn("Server {}: file {} version={} has invalid segment ({},{})",
+                         _server_idx, file_name, target_version,
+                         segments.rbegin()->first, segments.rbegin()->second);
+            segments.erase(std::prev(segments.end()));
+        }
+        if (segments.rbegin()->second > latest_stripes) {
+            spdlog::warn("Server {}: file {} version={} has invalid segment ({},{})",
+                         _server_idx, file_name, target_version,
+                         segments.rbegin()->first, segments.rbegin()->second);
+            std::pair<uint64_t, uint64_t> new_segment = {
+                segments.rbegin()->first, latest_stripes};
+            segments.erase(std::prev(segments.end()));
+            segments.insert(new_segment);
+        }
+
+        std::vector<ReadRange> ranges;
+        ranges.reserve(segments.size());
+        reconstructed_blocks.reserve(segments.size());
+        for (const auto& [start, end] : segments) {
+            reconstructed_blocks.emplace_back((end - start) * _config.block_size);
+            ranges.push_back({start * stripe_size, (end - start) * stripe_size,
+                             (char*)reconstructed_blocks.back().data()});
+        }
+        auto read_ret = MultiReadOrReconstruct(
+            _peers, file_name, latest_size, std::move(ranges), target_version,
+            _config.num_malicious, _config.block_size, 10s, _config.num_malicious, _server_idx);
+        if (read_ret.size() != segments.size()) throw std::runtime_error("Unexpected read result");
+        bool read_failed = false;
+        for (size_t i = 0; i < segments.size(); i++) {
+            if (read_ret[i] != (int64_t)reconstructed_blocks[i].size()) {
+                spdlog::warn("Server {}: file {} version={} segment {} read failed {} (expected {})",
+                             _server_idx, file_name, target_version, i, read_ret[i], reconstructed_blocks[i].size());
+                read_failed = true;
+                break;
+            }
+        }
+        if (read_failed) {
+            std::this_thread::sleep_for(5s);
+            continue;
+        }
         break;
     }
     std::shared_ptr<File> file = _data_storage[file_name];
     if (file == nullptr) throw std::runtime_error("File not found");
-    // file->UpdateUndoLogAndFile(update_log, segments, reconstructed_blocks, is_delete);
+    if (!file->UpdateUndoLogAndFile(update_log, segments, reconstructed_blocks)) {
+        spdlog::warn("Server {}: file {} version={} recovery failed",
+                     _server_idx, file_name, update_log.rbegin()->first);
+    }
 }
