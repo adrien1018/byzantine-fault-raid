@@ -1,5 +1,6 @@
 #pragma once
 
+#include <random>
 #include <filesystem>
 
 #include "config.h"
@@ -27,6 +28,7 @@ class FilesysImpl final : public Filesys::Service {
     DataStorage _data_storage;
     uint32_t _server_idx;
     std::vector<Filesys::Stub*> _peers;
+    std::mt19937_64 _rng;
 
    public:
     explicit FilesysImpl(const Config& config, const fs::path& local_storage,
@@ -50,8 +52,9 @@ class FilesysImpl final : public Filesys::Service {
     Status DeleteFile(ServerContext* context, const DeleteFileArgs* args,
                       google::protobuf::Empty* _) override;
 
-    void HeartBeat();
-
+  private:
+    void HeartBeatThread();
+    void HeartBeat(const std::vector<int>& peer_idx);
     void Recovery(const std::string& file_name, uint32_t current_version,
                   uint32_t target_version);
 };

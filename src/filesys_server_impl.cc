@@ -5,6 +5,7 @@
 #include <grpcpp/security/server_credentials.h>
 
 #include "async_query.h"
+#include "filesys_common.h"
 
 using grpc::Channel;
 using grpc::ClientAsyncResponseReader;
@@ -124,6 +125,7 @@ Status FilesysImpl::GetFileList(ServerContext* context, const GetFileListArgs* a
 
 Status FilesysImpl::GetUpdateLog(ServerContext* context, const GetUpdateLogArgs* args,
                     GetUpdateLogReply* reply) {
+    // Only OK if target version is reached
     return Status::OK;
 }
 
@@ -136,71 +138,97 @@ Status FilesysImpl::DeleteFile(ServerContext* context, const DeleteFileArgs* arg
     return Status::OK;
 }
 
-void FilesysImpl::HeartBeat() {
+void FilesysImpl::HeartBeatThread() {
+    std::vector<uint8_t> tried(_peers.size());
+    tried[_server_idx] = 1;
+
+    size_t tried_count = 1;
+    size_t num_peers = _config.num_malicious + 1;
     while (true) {
-        GetFileListArgs args;
-        args.set_include_deleted(true);
-
-        QueryServers<GetFileListReply>(
-            _peers, args, &Filesys::Stub::PrepareAsyncGetFileList,
-            2 * _config.num_malicious + 1, 1s, 10s,
-            [&](const std::vector<AsyncResponse<GetFileListReply>>&
-                    responses,
-                const std::vector<uint8_t>& replied,
-                size_t& minimum_success) -> bool {
-                std::unordered_map<std::string, std::vector<uint32_t>>
-                    file_versions;
-                for (uint32_t i = 0; i < replied.size(); i++) {
-                    if (replied[i] && responses[i].status.ok()) {
-                        const auto& files = responses[i].reply.files();
-                        for (auto& file : files) {
-                            std::string file_name = file.file_name();
-                            uint32_t version = file.last_update().version();
-                            file_versions[file_name].emplace_back(version);
-                        }
-                    }
-                }
-
-                for (auto& [file_name, versions] : file_versions) {
-                    if (versions.size() <= _config.num_malicious) continue;
-                    std::sort(versions.begin(), versions.end());
-                    uint32_t offset =
-                        versions.size() - _config.num_malicious - 1;
-                    uint32_t target_version = versions[offset];
-                    if (versions.size() > _config.num_malicious &&
-                        _data_storage.GetLatestVersion(file_name).value().version < target_version) {
-                        std::thread([this, file_name = file_name,
-                                        target_version]() {
-                            // Wait for possible write to come.
-                            std::this_thread::sleep_for(15s);
-                            uint32_t current_version =
-                                _data_storage.GetLatestVersion(file_name).value().version;
-                            if (current_version < target_version) {
-                                Recovery(file_name, current_version,
-                                            target_version);
-                            }
-                        }).detach();
-                    }
-                }
-                return true;
-            },
-            "GetFileList");
+        std::vector<int> servers;
+        servers.reserve(num_peers);
+        if (tried_count + num_peers >= _peers.size()) {
+            for (size_t i = 0; i < _peers.size(); i++) {
+                if (!tried[i]) servers.emplace_back(i);
+            }
+            tried.assign(_peers.size(), 0);
+            tried_count = 1;
+        }
+        if (servers.size() < num_peers) {
+            std::vector<int> options;
+            for (size_t i = 0; i < _peers.size(); i++) {
+                if (!tried[i]) options.emplace_back(i);
+            }
+            std::shuffle(options.begin(), options.end(), _rng);
+            options.resize(num_peers - servers.size());
+            tried_count += options.size();
+            for (auto& i : options) tried[i] = 1;
+            servers.insert(servers.end(), options.begin(), options.end());
+        }
+        
+        HeartBeat(servers);
         std::this_thread::sleep_for(10s);
     }
 }
 
-void FilesysImpl::Recovery(const std::string& file_name, uint32_t current_version,
-                uint32_t target_version) {
+void FilesysImpl::HeartBeat(const std::vector<int>& peer_idx) {
+    GetFileListArgs args;
+    args.set_include_deleted(true);
+
+    std::vector<Filesys::Stub*> peers;
+    for (auto& i : peer_idx) peers.emplace_back(_peers[i]);
+
+    QueryServers<GetFileListReply>(
+        peers, args, &Filesys::Stub::PrepareAsyncGetFileList,
+        0, 10s, 10s,
+        [&](const std::vector<AsyncResponse<GetFileListReply>>& responses,
+            const std::vector<uint8_t>& replied,
+            size_t& minimum_success) -> bool {
+            std::unordered_map<std::string, uint32_t> file_versions;
+            for (uint32_t i = 0; i < replied.size(); i++) {
+                if (!replied[i] || !responses[i].status.ok()) continue;
+                const auto& files = responses[i].reply.files();
+                for (auto& file : files) {
+                    if (!VerifyUpdateSignature(file.last_update(), file.file_name(),
+                                               file.public_key())) {
+                        continue;
+                    }
+                    std::string file_name = file.file_name();
+                    auto& file_version = file_versions[file_name];
+                    file_version = std::max(file_version, file.last_update().version());
+                }
+            }
+
+            for (auto& [file_name, target_version] : file_versions) {
+                if (_data_storage.GetLatestVersion(file_name).value().version < target_version) {
+                    // TODO: use thread pool?
+                    std::thread([this, file_name = file_name, target_version]() {
+                        // Wait for possible write to come.
+                        std::this_thread::sleep_for(15s);
+                        uint32_t current_version =
+                            _data_storage.GetLatestVersion(file_name).value().version;
+                        if (current_version < target_version) {
+                            Recovery(file_name, current_version, target_version);
+                        }
+                    }).detach();
+                }
+            }
+            return true;
+        }, "HeartBeat");
+}
+
+void FilesysImpl::Recovery(
+    const std::string& file_name, uint32_t current_version, uint32_t target_version) {
     GetUpdateLogArgs args;
     args.set_file_name(file_name);
     args.set_after_version(current_version);
+    args.set_target_version(target_version);
     std::map<uint32_t, UndoRecord> update_log;
     while (true) {
         QueryServers<GetUpdateLogReply>(
             _peers, args, &Filesys::Stub::PrepareAsyncGetUpdateLog,
-            2 * _config.num_malicious + 1, 1s, 5s,
-            [&](const std::vector<AsyncResponse<GetUpdateLogReply>>&
-                    responses,
+            _config.num_malicious + 1, 1s, 5s,
+            [&](const std::vector<AsyncResponse<GetUpdateLogReply>>& responses,
                 const std::vector<uint8_t>& replied,
                 size_t& minimum_success) -> bool {
                 // TODO: Finish after finalizing update log format

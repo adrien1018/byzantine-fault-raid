@@ -73,6 +73,7 @@ message GetFileListReply {
 message GetUpdateLogArgs {
   string file_name = 1;
   uint32 after_version = 2;
+  uint32 target_version = 3;
 }
 
 message GetUpdateLogReply {

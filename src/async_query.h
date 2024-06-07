@@ -27,14 +27,15 @@ bool WaitResponses(size_t N, grpc::CompletionQueue& cq,
     size_t num_received = 0;
     spdlog::debug("{}: Waiting for {} responses", log_tag, N);
 
-    auto Received = [&]() {
+    auto Received = [&](bool ok) {
         size_t i = (size_t)idx;
+        if (replied[i]) return;
         replied[i] = true;
         if (++num_received == N) {
             cq.Shutdown();
             shutting_down = true;
         }
-        if (response_buffer[i].status.ok()) num_success++;
+        if (ok && response_buffer[i].status.ok()) num_success++;
         if (log_tag.size()) {
             spdlog::debug(
                 "{}: Got response from server {}, ok={}, num_success={}",
@@ -47,12 +48,13 @@ bool WaitResponses(size_t N, grpc::CompletionQueue& cq,
         }
     };
     while (cq.Next(&idx, &ok)) {
-        if (shutting_down || !ok) continue;
-        Received();
-        if (num_success >= minimum_success) {
+        if (shutting_down) continue;
+        Received(ok);
+        if (minimum_success > 0 && num_success >= minimum_success) {
             auto deadline = std::chrono::system_clock::now() + additional_wait;
-            while (cq.AsyncNext(&idx, &ok, deadline) == grpc::CompletionQueue::GOT_EVENT && ok) {
-                Received();
+            while (!shutting_down &&
+                   cq.AsyncNext(&idx, &ok, deadline) == grpc::CompletionQueue::GOT_EVENT) {
+                Received(ok);
             }
             if (log_tag.size()) {
                 spdlog::debug("{}: Calling callback at {} successes", log_tag,
@@ -74,6 +76,22 @@ bool WaitResponses(size_t N, grpc::CompletionQueue& cq,
             }
         }
     }
+    if (minimum_success == 0) {
+        if (log_tag.size()) {
+            spdlog::debug("{}: Calling callback at the end ({} successes)", log_tag,
+                          num_success);
+        }
+        if (callback(response_buffer, replied, minimum_success)) {
+            if (log_tag.size()) {
+                spdlog::info("{}: Successful callback", log_tag, num_success);
+            }
+        } else {
+            if (log_tag.size()) {
+                spdlog::info("{}: Callback returned false", log_tag, minimum_success);
+            }
+        }
+        return true;
+    }
     if (log_tag.size()) {
         spdlog::warn("{}: minimum_success not reached ({}/{}) with {}/{} received responses",
                      log_tag, num_success, minimum_success, num_received, N);
@@ -94,11 +112,12 @@ minimum_success, 100ms, 30s,
     });
 
   * The callback will only be called when number of success >= minimum_success
-  * Minimum_success can be modified in the callback
+  * minimum_success can be modified in the callback
+  *   if 0, the callback will only be called at the end
   * Return true in the callback will skip all the remaining responses
   * The whole function will return true only if callback returns true
   * additional_wait specifies the time to wait after getting minimum_success
-successful responses
+  *   successful responses
   */
 template <class ResponseClass, class RequestClass, class Callback,
           class AsyncFunction, class Stub, class Rep1, class Period1,

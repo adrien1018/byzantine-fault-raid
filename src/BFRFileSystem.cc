@@ -4,10 +4,10 @@
 #include <spdlog/fmt/ranges.h>
 #include <spdlog/spdlog.h>
 
-#include "async_query.h"
-#include "encode_decode.h"
-#include "filesys.grpc.pb.h"
 #include "signature.h"
+#include "async_query.h"
+#include "filesys_common.h"
+#include "filesys.grpc.pb.h"
 
 using filesys::CreateFileArgs;
 using filesys::DeleteFileArgs;
@@ -55,23 +55,6 @@ constexpr typename std::vector<T, Alloc>::size_type erase_if(
 }
 
 }  // namespace std
-
-namespace {
-
-bool VerifyUpdateSignature(const filesys::UpdateMetadata& metadata,
-                           const std::string& filename, const Bytes& public_key) {
-    return VerifyUpdate(StrToBytes(metadata.version_signature()), 
-                        SigningKey(public_key, false), filename,
-                        metadata.stripe_range().offset(), metadata.stripe_range().count(),
-                        metadata.version(), metadata.is_delete());
-}
-
-bool VerifyUpdateSignature(const filesys::UpdateMetadata& metadata,
-                           const std::string& filename, const std::string& public_key) {
-    return VerifyUpdateSignature(metadata, filename, StrToBytes(public_key));
-}
-
-}  // namespace
 
 
 /*
@@ -154,11 +137,6 @@ std::optional<FileMetadata> BFRFileSystem::QueryMetadata_(
                     continue;
                 }
                 auto& file = reply.files(0);
-                if (StrToBytes(file.public_key()) != GetPublicKeyFromPath(path) ||
-                    file.file_name() != path) {
-                    spdlog::warn("Invalid public key for file {}", path);
-                    continue;
-                }
                 if (!VerifyUpdateSignature(file.last_update(), path,
                                            file.public_key())) {
                     spdlog::warn("Invalid signature for file {}", path);
@@ -206,10 +184,6 @@ std::unordered_set<std::string> BFRFileSystem::getFileList() const {
 
                 for (const FileInfo &fileInfo : reply.files()) {
                     // verify signature
-                    if (StrToBytes(fileInfo.public_key()) != GetPublicKeyFromPath(fileInfo.file_name())) {
-                        spdlog::warn("Invalid public key for file {}", fileInfo.file_name());
-                        continue;
-                    }
                     if (!VerifyUpdateSignature(fileInfo.last_update(), fileInfo.file_name(),
                                                fileInfo.public_key())) {
                         spdlog::warn("Invalid signature for file {}", fileInfo.file_name());
@@ -272,10 +246,10 @@ int BFRFileSystem::create(const std::string& path) const {
     auto servers = QueryServers_();
     for (int i = 0; i < NUM_RETRIES; i++) {
         size_t success_threshold = servers.size() - numFaulty_ + numMalicious_;
-        std::vector<uint8_t> success = std::vector<uint8_t>(numServers_, 0);
+        std::vector<uint8_t> success = std::vector<uint8_t>(servers.size(), 0);
         const bool createSuccess = QueryServers<Empty>(
             QueryServers_(), args, &Filesys::Stub::AsyncCreateFile,
-            0, 0s, timeout_,
+            1, 0s, timeout_,
             [&](const std::vector<AsyncResponse<Empty>> &responses,
                 const std::vector<uint8_t> &replied,
                 size_t &minimum_success) -> bool {
@@ -500,10 +474,10 @@ int64_t BFRFileSystem::write(const std::string& path, const char *buf,
     auto servers = QueryServers_();
     for (int i = 0; i < NUM_RETRIES; i++) {
         size_t success_threshold = servers.size() - numFaulty_ + numMalicious_;
-        std::vector<uint8_t> success = std::vector<uint8_t>(numServers_, 0);
+        std::vector<uint8_t> success = std::vector<uint8_t>(servers.size(), 0);
         const bool writeSuccess = QueryServers<Empty>(
             QueryServers_(), requests, &Filesys::Stub::AsyncWriteBlocks,
-            0, 0s, timeout_,
+            1, 0s, timeout_,
             [&](const std::vector<AsyncResponse<Empty>> &responses,
                 const std::vector<uint8_t> &replied,
                 size_t &minimum_success) -> bool {
