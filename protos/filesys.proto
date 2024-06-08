@@ -46,6 +46,7 @@ message UpdateMetadata {
 message ReadBlocksReply {
   repeated bytes block_data = 1;
   uint32 version = 2;
+  repeated UpdateMetadata update_log = 3;
 }
 
 message WriteBlocksArgs {

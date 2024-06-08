@@ -122,10 +122,9 @@ std::vector<int64_t> MultiReadOrReconstruct(
               //spdlog::debug("{}, {}, {}", stripeOffset,
               //              encodedBlocks.size(), stripe);
               const uint64_t stripeId = startStripeId + stripeOffset;
-              // spdlog::debug("Decode {}, {}, {}, {}, {}, {}, {}",
-              //               stripeSize_, numServers_, numFaulty_,
-              //               signingKey_.PublicKey(), path, stripeId,
-              //               version);
+              // spdlog::debug("Decode {}, {}, {}, {}, {}, {}, {}, {}",
+              //               stripe_size, num_servers, num_faulty,
+              //               public_key.PublicKey(), filename, stripeId, version, stripe[0]);
               if (reconstruct_server == -1) {
                 const Bytes decodedStripe = Decode(
                     stripe, stripe_size, num_servers, num_faulty,
@@ -149,7 +148,6 @@ std::vector<int64_t> MultiReadOrReconstruct(
         } catch (DecodeError &e) {
           spdlog::info("Decode error: {} {} {}", e.what(), e.remaining_blocks, num_success);
           minimum_success = num_success + e.remaining_blocks;
-          exit(1);
           return false;
         }
         ret = nret;

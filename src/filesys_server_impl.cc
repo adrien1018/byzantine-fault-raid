@@ -84,21 +84,19 @@ Status FilesysImpl::CreateFile(
 Status FilesysImpl::ReadBlocks(ServerContext* context, const ReadBlocksArgs* args,
                     ReadBlocksReply* reply) {
     std::string file_name = args->file_name();
-    uint32_t version = 0;
-    if (args->has_version()) {
-        version = args->version();
-    } else {
-        auto latest_version = _data_storage.GetLatestVersion(file_name);
-        if (!latest_version.has_value()) {
-            return grpc::Status(grpc::StatusCode::NOT_FOUND, "File not found.");
-        }
-        version = latest_version.value().version;
+    
+    auto file = _data_storage[file_name];
+    if (file == nullptr) {
+        return grpc::Status(grpc::StatusCode::NOT_FOUND, "File not found.");
     }
+    std::lock_guard<std::mutex> lock(file->Mutex());
+
+    uint32_t version = args->has_version() ? args->version() : file->LastUpdate().version;
     spdlog::info("Server {}: Read {}, version={}", _server_idx, args->file_name(), version);
 
+    reply->set_version(version);
     for (auto& range : args->stripe_ranges()) {
-        Bytes block_data = _data_storage.ReadFile(file_name, range.offset(),
-                                                    range.count(), version);
+        Bytes block_data = file->ReadVersion(version, range.offset(), range.count());
         if (block_data.empty()) {
             return grpc::Status(grpc::StatusCode::NOT_FOUND,
                                 "Version does not exist or has expired.");
@@ -107,7 +105,10 @@ Status FilesysImpl::ReadBlocks(ServerContext* context, const ReadBlocksArgs* arg
             std::string(block_data.begin(), block_data.end());
         *reply->add_block_data() = block_data_str;
     }
-    reply->set_version(version);
+    for (const auto& metadata : file->GetUpdateLog(0)) {
+        filesys::UpdateMetadata* update_metadata = reply->add_update_log();
+        ToGRPCUpdateMetadata(*update_metadata, metadata);
+    }
     return Status::OK;
 }
 
@@ -159,14 +160,12 @@ Status FilesysImpl::GetUpdateLog(ServerContext* context, const GetUpdateLogArgs*
     if (file == nullptr) {
         return grpc::Status(grpc::StatusCode::NOT_FOUND, "File not found.");
     }
-    std::lock_guard<std::mutex> lock(file->Mutex());
 
-    auto update_log = file->GetUpdateLog(args->after_version());
-    for (const auto& metadata : update_log) {
+    std::lock_guard<std::mutex> lock(file->Mutex());
+    for (const auto& metadata : file->GetUpdateLog(args->after_version())) {
         filesys::UpdateMetadata* update_metadata = reply->add_log();
         ToGRPCUpdateMetadata(*update_metadata, metadata);
     }
-
     return Status::OK;
 }
 
