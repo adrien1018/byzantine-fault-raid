@@ -32,9 +32,9 @@ int main() {
     //puts("");
   }
   */
-  //constexpr int SIZE = 1 * 1024 * 1024;
+  //constexpr int SIZE = 4 * 1024 * 1024;
   printf("%7s%4s%4s%6s%12s%12s%12s%12s%12s\n", "Block", "n", "d", "eff%", "Encode", "Recon", "Dec no err", "Dec 1 err", "Dec n-d err");
-  for (int block_size : {512, 4096, 16384, 65536}) for (int n : {6, 20, 70, 255}) for (int d : {n/6,n/2}) {
+  for (int block_size : {512, 4096, 16384, 65536}) for (int n : {10}) for (int d : {3}) for (int i = 0; i < 5; i++) {
     //Bytes data(SIZE / (n-d) * (n-d));
     Bytes data(block_size * (n - d));
     for (auto& i : data) i = gen();
@@ -43,7 +43,7 @@ int main() {
     auto blocks = Encode(data, n, d, key, "name", 0, 0);
     auto end = steady_clock::now();
     double encode_time = duration<double>(end - start).count();
-   
+
     for (int i = 0; i < n; i++) {
       if (!VerifyBlock(blocks[i], n, i, key, "name", 0, 0)) throw;
     }
