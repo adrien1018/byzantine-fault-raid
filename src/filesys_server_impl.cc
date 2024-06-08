@@ -246,7 +246,7 @@ void FilesysImpl::HeartBeat(const std::vector<int>& peer_idx) {
                 if (!latest_update.has_value() || latest_update.value().version < target_version) {
                     _thread_pool.detach_task([this, file_name = file_name, target_version]() {
                         // Wait for possible write to come.
-                        std::this_thread::sleep_for(5s);
+                        std::this_thread::sleep_for(500ms);
                         auto latest_update = _data_storage.GetLatestVersion(file_name);
                         uint32_t current_version = latest_update.has_value() ?
                             latest_update.value().version : 0;
