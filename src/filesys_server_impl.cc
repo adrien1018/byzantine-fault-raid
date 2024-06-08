@@ -262,7 +262,7 @@ void FilesysImpl::Recovery(
     if (!lock.owns_lock()) return;
 
     spdlog::info("Server {}: Recovery for {} version={}", _server_idx, file_name, current_version);
-    const size_t stripe_size = GetStripeSize(_config.block_size, _config.servers.size(), _config.num_malicious);
+    const size_t stripe_size = GetStripeSize(_config.block_size, _config.servers.size(), _config.num_faulty);
     Bytes public_key = GetPublicKeyFromPath(file_name);
 
     auto peers = _peers;
