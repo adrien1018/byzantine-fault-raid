@@ -17,6 +17,8 @@ static_assert(sizeof(off_t) == 8, "off_t must be 64 bits");
 
 namespace {
 
+using FileList = std::unordered_set<std::string>;
+
 std::unique_ptr<BFRFileSystem> bfrFs;
 std::map<std::string, size_t> directory_list;
 
@@ -25,7 +27,7 @@ inline std::string Parent(const std::string &path) {
     return pos == std::string::npos ? "" : path.substr(0, pos);
 }
 
-void UpdateDirectoryList(const std::unordered_set<std::string> &fileList) {
+void UpdateDirectoryList(const FileList &fileList) {
     std::string prefix = bfrFs->GetPrefix();
     prefix.pop_back();
     directory_list[prefix] = 0;
@@ -90,7 +92,11 @@ static int bfr_getattr(const char *path, struct stat *stbuf)
     }
 
     // Directory
-    UpdateDirectoryList(bfrFs->getFileList());
+    try {
+      UpdateDirectoryList(bfrFs->getFileList());
+    } catch (std::runtime_error&) {
+      return -EIO;
+    }
     if (auto it = directory_list.find(pathStr); it != directory_list.end()) {
         stbuf->st_mode = S_IFDIR | (IsOwner(pathStr, true) ? 0755 : 0555);
         stbuf->st_nlink = 2 + it->second;
@@ -138,8 +144,14 @@ int bfr_readdir(const char *path, void *buf, fuse_fill_dir_t filler_arg,
 {
     std::string pathStr(path[0] ? path + 1 : path);
     spdlog::info("FUSE readdir: {}", pathStr);
-    auto fileList = bfrFs->getFileList();
-    UpdateDirectoryList(fileList);
+
+    FileList fileList;
+    try {
+      fileList = bfrFs->getFileList();
+      UpdateDirectoryList(fileList);
+    } catch (std::runtime_error&) {
+      return -EIO;
+    }
 
     for (auto& i : directory_list) {
         spdlog::debug("dir: {} {}", i.first, i.second);
@@ -206,7 +218,11 @@ int bfr_mkdir(const char* path, mode_t mode) {
     if (!IsOwner(pathStr)) {
         return -EACCES;
     }
-    UpdateDirectoryList(bfrFs->getFileList());
+    try {
+      UpdateDirectoryList(bfrFs->getFileList());
+    } catch (std::runtime_error&) {
+      return -EIO;
+    }
     auto parent = Parent(pathStr);
     auto parent_it = directory_list.find(Parent(pathStr));
     if (parent_it == directory_list.end()) {
@@ -225,7 +241,11 @@ int bfr_rmdir(const char* path) {
     if (!IsOwner(pathStr)) {
         return -EACCES;
     }
-    UpdateDirectoryList(bfrFs->getFileList());
+    try {
+      UpdateDirectoryList(bfrFs->getFileList());
+    } catch (std::runtime_error&) {
+      return -EIO;
+    }
     auto it = directory_list.find(pathStr);
     if (it == directory_list.end()) {
         return -ENOENT;
