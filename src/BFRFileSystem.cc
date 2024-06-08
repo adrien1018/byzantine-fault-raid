@@ -245,8 +245,13 @@ int BFRFileSystem::create(const std::string& path) const {
     CreateFileArgs args;
     args.set_file_name(path);
     args.set_version(version);
-    args.set_version_signature(BytesToStr(
-        SignUpdate(signingKey_, path, 0, 0, version, false)));
+    args.set_version_signature(BytesToStr(SignUpdate(signingKey_, path, UpdateMetadata{
+        .version = version,
+        .stripe_offset = 0,
+        .num_stripes = 0,
+        .file_size = 0,
+        .is_delete = false,
+    })));
 
     auto servers = QueryServers_();
     for (int i = 0; i < NUM_RETRIES; i++) {
@@ -349,8 +354,13 @@ int64_t BFRFileSystem::write(const std::string& path, const char *buf,
                                      : metadata.value().fileSize;
     std::vector<WriteBlocksArgs> requests(numServers_);
 
-    std::string update_signature = BytesToStr(
-        SignUpdate(signingKey_, path, startStripeId, numStripes, newVersion, false));
+    std::string update_signature = BytesToStr(SignUpdate(signingKey_, path, UpdateMetadata{
+        .version = newVersion,
+        .stripe_offset = startStripeId,
+        .num_stripes = numStripes,
+        .file_size = newFilesize,
+        .is_delete = false,
+    }));
     for (auto& i : requests) {
         i.set_file_name(path);
         i.mutable_block_data()->resize(blockSize_ * numStripes);
@@ -434,8 +444,13 @@ int BFRFileSystem::unlink(const std::string& path) const {
     DeleteFileArgs args;
     args.set_file_name(path);
     args.set_version(newVersion);
-    args.set_version_signature(BytesToStr(
-        SignUpdate(signingKey_, path, 0, 0, newVersion, true)));
+    args.set_version_signature(BytesToStr(SignUpdate(signingKey_, path, UpdateMetadata{
+        .version = newVersion,
+        .stripe_offset = 0,
+        .num_stripes = 0,
+        .file_size = 0,
+        .is_delete = true,
+    })));
 
     const bool deleteSuccess = QueryServers<Empty>(
         QueryServers_(), args, &Filesys::Stub::AsyncDeleteFile,

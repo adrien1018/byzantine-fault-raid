@@ -9,10 +9,15 @@ inline bool VerifyUpdateSignature(
   if (public_key != GetPublicKeyFromPath(filename)) {
     return false;
   }
+  UpdateMetadata meta{
+      .version = metadata.version(),
+      .stripe_offset = metadata.stripe_range().offset(),
+      .num_stripes = metadata.stripe_range().count(),
+      .file_size = metadata.file_size(),
+      .is_delete = metadata.is_delete(),
+  };
   return VerifyUpdate(StrToBytes(metadata.version_signature()), 
-                      SigningKey(public_key, false), filename,
-                      metadata.stripe_range().offset(), metadata.stripe_range().count(),
-                      metadata.version(), metadata.is_delete());
+                      SigningKey(public_key, false), filename, meta);
 }
 
 inline bool VerifyUpdateSignature(

@@ -51,19 +51,28 @@ Bytes RandomStripe(const std::string& file_name, int version, int stripe_offset,
 
 bool CreateFile(DataStorage& storage, const std::string& file_name) {
     std::string real_name = prefix + file_name;
-    return storage.CreateFile(real_name, 0, SignUpdate(private_key, real_name, 0, 0, 0, false));
+    UpdateMetadata meta = {
+        .version = 0,
+        .stripe_offset = 0,
+        .num_stripes = 0,
+        .file_size = 0,
+    };
+    return storage.CreateFile(real_name, 0, SignUpdate(private_key, real_name, meta));
 }
 
 bool WriteFile(DataStorage& storage,
-               const std::string& file_name, uint32_t version, size_t stripe_offset, size_t num_stripes,
+               const std::string& file_name, uint32_t version, uint64_t file_blocks,
+               size_t stripe_offset, size_t num_stripes,
                int block_idx, const Bytes& block_data) {
     std::string real_name = prefix + file_name;
     UpdateMetadata meta = {
         .version = version,
         .stripe_offset = stripe_offset,
         .num_stripes = num_stripes,
-        .signature = SignUpdate(private_key, real_name, stripe_offset, num_stripes, version, false),
+        .file_size = std::max(file_blocks * BLOCK_SIZE, (stripe_offset + num_stripes) * BLOCK_SIZE),
+        .is_delete = false,
     };
+    meta.signature = SignUpdate(private_key, real_name, meta);
     return storage.WriteFile(real_name, meta, block_idx, block_data);
 }
 
@@ -109,7 +118,7 @@ void TestSimpleReadWrite() {
     std::string file_name{"temp"};
     CreateFile(storage, file_name);
     Bytes stripe = RandomStripe(file_name, 1, 0, 1);
-    WriteFile(storage, file_name, 1, 0, 1, 0, stripe);
+    WriteFile(storage, file_name, 1, 0, 0, 1, 0, stripe);
     Bytes retrieved_stripe = ReadFile(storage, "temp", 0, 1, 1);
     assert(stripe == retrieved_stripe && "Block mismatch");
 
@@ -133,7 +142,7 @@ void TestGetLatestVersion() {
         Bytes stripe;
         for (uint32_t i = 0; i < update_num; i++) {
             stripe = RandomStripe(file_name, i + 1, 0, 1);
-            bool ret = WriteFile(storage, file_name, i + 1, 0, 1, 0, stripe);
+            bool ret = WriteFile(storage, file_name, i + 1, 0, 0, 1, 0, stripe);
             assert(ret && "Write failed");
         }
         assert(update_num == storage.GetLatestVersion(prefix + file_name).value().version &&
@@ -153,17 +162,17 @@ void TestExtendFile() {
     std::string file_name{"temp"};
     CreateFile(storage, file_name);
     Bytes stripe = RandomStripe(file_name, 1, 0, 1);
-    assert(WriteFile(storage, file_name, 1, 0, 1, 0, stripe) && "Write first failed");
+    assert(WriteFile(storage, file_name, 1, 0, 0, 1, 0, stripe) && "Write first failed");
     assert(stripe == ReadFile(storage, file_name, 0, 1, 1) && "Read fail 1");
 
     Bytes stripe1 = RandomStripe(file_name, 2, 1, 2);
-    assert(WriteFile(storage, file_name, 2, 1, 2, 0, stripe1) &&
+    assert(WriteFile(storage, file_name, 2, 1, 1, 2, 0, stripe1) &&
            "Write second failed");
     stripe.insert(stripe.end(), stripe1.begin(), stripe1.end());
     assert(stripe == ReadFile(storage, file_name, 0, 3, 2) && "Read fail 2");
 
     Bytes stripe2 = RandomStripe(file_name, 3, 3, 4);
-    assert(WriteFile(storage, file_name, 3, 3, 4, 0, stripe2) &&
+    assert(WriteFile(storage, file_name, 3, 3, 3, 4, 0, stripe2) &&
            "Write third failed");
     stripe.insert(stripe.end(), stripe2.begin(), stripe2.end());
     assert(stripe == ReadFile(storage, file_name, 0, 7, 3) && "Read fail 3");
@@ -180,19 +189,19 @@ void TestOverlapExtend() {
     const std::string& file_name{"temp"};
     CreateFile(storage, file_name);
     Bytes stripe = RandomStripe(file_name, 1, 0, 2);
-    assert(WriteFile(storage, file_name, 1, 0, 2, 0, stripe) &&
+    assert(WriteFile(storage, file_name, 1, 0, 0, 2, 0, stripe) &&
            "Write first failed");
     assert(stripe == ReadFile(storage, file_name, 0, 2, 1) && "Read fail 1");
 
     Bytes stripe2 = RandomStripe(file_name, 2, 1, 2);
-    assert(WriteFile(storage, file_name, 2, 1, 2, 0, stripe2) &&
+    assert(WriteFile(storage, file_name, 2, 2, 1, 2, 0, stripe2) &&
            "Write second failed");
     stripe.resize(BLOCK_SIZE);
     stripe.insert(stripe.end(), stripe2.begin(), stripe2.end());
     assert(stripe == ReadFile(storage, file_name, 0, 3, 2) && "Read fail 2");
 
     Bytes stripe3 = RandomStripe(file_name, 3, 2, 4);
-    assert(WriteFile(storage, file_name, 3, 2, 4, 0, stripe3) &&
+    assert(WriteFile(storage, file_name, 3, 3, 2, 4, 0, stripe3) &&
            "Write third failed");
     stripe.resize(2 * BLOCK_SIZE);
     stripe.insert(stripe.end(), stripe3.begin(), stripe3.end());
@@ -210,7 +219,7 @@ void TestSimpleMultipleWrite() {
     const std::string file_name{"temp"};
     CreateFile(storage, file_name);
     Bytes version1 = RandomStripe(file_name, 1, 0, 10);
-    assert(WriteFile(storage, file_name, 1, 0, 10, 0, version1) &&
+    assert(WriteFile(storage, file_name, 1, 0, 0, 10, 0, version1) &&
            "Write first failed");
 
     uint32_t stripe_offset = 2;
@@ -219,7 +228,7 @@ void TestSimpleMultipleWrite() {
     for (uint32_t i = 0; i < update2.size(); i++) {
         version2[stripe_offset * BLOCK_SIZE + i] = update2[i];
     }
-    assert(WriteFile(storage, file_name, 2, stripe_offset, 2, 0, update2) &&
+    assert(WriteFile(storage, file_name, 2, 10, stripe_offset, 2, 0, update2) &&
            "Write second failed");
 
     stripe_offset = 5;
@@ -228,11 +237,11 @@ void TestSimpleMultipleWrite() {
     for (uint32_t i = 0; i < update3.size(); i++) {
         version3[stripe_offset * BLOCK_SIZE + i] = update3[i];
     }
-    assert(WriteFile(storage, file_name, 3, stripe_offset, 4, 0, update3) &&
+    assert(WriteFile(storage, file_name, 3, 10, stripe_offset, 4, 0, update3) &&
            "Write third failed");
 
     Bytes version4 = RandomStripe(file_name, 4, 0, 10);
-    assert(WriteFile(storage, file_name, 4, 0, 10, 0, version4) &&
+    assert(WriteFile(storage, file_name, 4, 10, 0, 10, 0, version4) &&
            "Write four failed");
 
     assert(Bytes(version4.begin() + 5 * BLOCK_SIZE,
@@ -262,20 +271,20 @@ void TestMultipleExtendWrite() {
     const std::string file_name{"temp"};
     CreateFile(storage, file_name);
     Bytes version1 = RandomStripe(file_name, 1, 0, 1);
-    assert(WriteFile(storage, file_name, 1, 0, 1, 0, version1) &&
+    assert(WriteFile(storage, file_name, 1, 0, 0, 1, 0, version1) &&
            "Write first failed");
 
     Bytes update2 = RandomStripe(file_name, 2, 1, 1);
     Bytes version2 = version1;
     version2.insert(version2.end(), update2.begin(), update2.end());
-    assert(WriteFile(storage, file_name, 2, 1, 1, 0, update2) &&
+    assert(WriteFile(storage, file_name, 2, 1, 1, 1, 0, update2) &&
            "Write second failed");
 
     Bytes update3 = RandomStripe(file_name, 3, 1, 2);
     Bytes version3 = version2;
     version3.resize(BLOCK_SIZE);
     version3.insert(version3.end(), update3.begin(), update3.end());
-    assert(WriteFile(storage, file_name, 3, 1, 2, 0, update3) &&
+    assert(WriteFile(storage, file_name, 3, 2, 1, 2, 0, update3) &&
            "Write third failed");
 
     assert(version3 == ReadFile(storage, file_name, 0, 3, 3) &&
@@ -297,14 +306,14 @@ void TestGarbageCollection() {
     const std::string file_name{"temp"};
     CreateFile(storage, file_name);
     Bytes version1 = RandomStripe(file_name, 1, 0, 5);
-    assert(WriteFile(storage, file_name, 1, 0, 5, 0, version1) &&
+    assert(WriteFile(storage, file_name, 1, 0, 0, 5, 0, version1) &&
            "Write first failed");
     assert(Bytes(version1.begin() + BLOCK_SIZE,
                  version1.begin() + 3 * BLOCK_SIZE) ==
            ReadFile(storage, file_name, 1, 2, 1));
 
     Bytes version2 = RandomStripe(file_name, 2, 0, 10);
-    assert(WriteFile(storage, file_name, 2, 0, 10, 0, version2) &&
+    assert(WriteFile(storage, file_name, 2, 5, 0, 10, 0, version2) &&
            "Write second failed");
 
     std::this_thread::sleep_for(std::chrono::seconds(30) +
@@ -313,7 +322,7 @@ void TestGarbageCollection() {
            "Version 1 not deleted");
 
     Bytes version3 = RandomStripe(file_name, 3, 4, 12);
-    assert(WriteFile(storage, file_name, 3, 4, 12, 0, version3) &&
+    assert(WriteFile(storage, file_name, 3, 10, 4, 12, 0, version3) &&
            "Write third failed");
 
     assert(version2 == ReadFile(storage, file_name, 0, 10, 2));
@@ -366,7 +375,7 @@ void TestConcurrentReadWrite() {
 
     for (uint32_t i = 0; i < max_version; i++) {
         answers[i] = RandomStripe(file_name, i + 1, 0, 1);
-        assert(WriteFile(storage, file_name, i + 1, 0, 1, 0, answers[i]));
+        assert(WriteFile(storage, file_name, i + 1, 0, 0, 1, 0, answers[i]));
         std::this_thread::sleep_for(std::chrono::seconds(5));
     }
 
@@ -392,20 +401,20 @@ void TestStorageBackup() {
     const std::string file_name{"temp"};
     CreateFile(storage, file_name);
     Bytes version1 = RandomStripe(file_name, 1, 0, 1);
-    assert(WriteFile(storage, file_name, 1, 0, 1, 0, version1) &&
+    assert(WriteFile(storage, file_name, 1, 0, 0, 1, 0, version1) &&
            "Write first failed");
 
     Bytes update2 = RandomStripe(file_name, 2, 1, 1);
     Bytes version2 = version1;
     version2.insert(version2.end(), update2.begin(), update2.end());
-    assert(WriteFile(storage, file_name, 2, 1, 1, 0, update2) &&
+    assert(WriteFile(storage, file_name, 2, 1, 1, 1, 0, update2) &&
            "Write second failed");
 
     Bytes update3 = RandomStripe(file_name, 3, 1, 2);
     Bytes version3 = version2;
     version3.resize(BLOCK_SIZE);
     version3.insert(version3.end(), update3.begin(), update3.end());
-    assert(WriteFile(storage, file_name, 3, 1, 2, 0, update3) &&
+    assert(WriteFile(storage, file_name, 3, 2, 1, 2, 0, update3) &&
            "Write third failed");
 
     DataStorage second_storage(test_dir, 1, BLOCK_SIZE, GetStripeSize(BLOCK_SIZE, 1, 0));

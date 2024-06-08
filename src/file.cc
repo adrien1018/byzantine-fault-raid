@@ -5,8 +5,6 @@
 #include <optional>
 #include <spdlog/spdlog.h>
 
-#include "encode_decode.h"
-
 using namespace std::chrono_literals;
 
 //#define NO_VERIFY
@@ -14,8 +12,7 @@ using namespace std::chrono_literals;
 /* Persisting the record on disk. The format is:
     |version (4 bytes)|stripe_offset (8 bytes)|num_stripes (8 bytes)
     |is_delete (1 byte)|signature (64 bytes)
-    |stripe_size (8 bytes)|metadat
-    ta (variable size)| */
+    |metadata (variable size)| */
 
 UndoRecord UndoRecord::ReadFromFile(std::ifstream& ifs) {
     UndoRecord record;
@@ -25,7 +22,6 @@ UndoRecord UndoRecord::ReadFromFile(std::ifstream& ifs) {
     ifs.read((char*)&record.metadata.is_delete, sizeof(bool));
     record.metadata.signature.resize(SigningKey::kSignatureSize);
     ifs.read((char*)record.metadata.signature.data(), SigningKey::kSignatureSize);
-    ifs.read((char*)&record.stripe_size, sizeof(uint64_t));
     ifs.read((char*)&record.metadata.file_size, sizeof(uint64_t));
     ifs.read((char*)&record.has_image, sizeof(bool));
     uint64_t read_size;
@@ -45,7 +41,6 @@ void UndoRecord::WriteToFile(std::ofstream& ofs) const {
         throw std::runtime_error("Invalid signature size");
     }
     ofs.write((char*)metadata.signature.data(), SigningKey::kSignatureSize);
-    ofs.write((char*)&stripe_size, sizeof(uint64_t));
     ofs.write((char*)&metadata.file_size, sizeof(uint64_t));
     ofs.write((char*)&has_image, sizeof(bool));
     uint64_t read_size = old_image.size();
@@ -74,8 +69,17 @@ File::File(const std::string& directory, const std::string& file_name,
       _garbage_collection(&File::_GarbageCollectRecord, this),
       _block_size(block_size),
       _raw_stripe_size(raw_stripe_size) {
+
+    UpdateMetadata meta = {
+        .version = version,
+        .stripe_offset = 0,
+        .num_stripes = 0,
+        .file_size = 0,
+        .is_delete = false,
+        .signature = version_signature,
+    };
 #ifndef NO_VERIFY
-    if (!VerifyUpdate(version_signature, _public_key, _file_name, 0, 0, version, false)) {
+    if (!VerifyUpdate(version_signature, _public_key, _file_name, meta)) {
         spdlog::warn("Version signature verification failed");
         throw std::runtime_error("Version signature verification failed");
     }
@@ -94,14 +98,6 @@ File::File(const std::string& directory, const std::string& file_name,
         throw std::runtime_error("Failed to open file");
     }
 
-    UpdateMetadata meta = {
-        .version = version,
-        .stripe_offset = 0,
-        .num_stripes = 0,
-        .file_size = 0,
-        .is_delete = false,
-        .signature = version_signature,
-    };
     _update_record[version] = _CreateUndoRecord(meta);
 
     _WriteMetadata();
@@ -207,7 +203,6 @@ UndoRecord File::_CreateUndoRecord(const UpdateMetadata& metadata, bool current)
 
     UndoRecord record{
         .metadata = metadata,
-        .stripe_size = 0,
         .has_image = false,
         .old_image = Bytes(),
         .time_to_live = Clock::now() + 30s,
@@ -227,7 +222,6 @@ UndoRecord File::_CreateUndoRecord(const UpdateMetadata& metadata, bool current)
                 _file_stream.read((char*)buffer.data(), read_size);
             }
         }
-        record.stripe_size = _GetCurrentStripeSize();
         record.has_image = true;
         record.old_image = std::move(buffer);
     } else {
@@ -286,30 +280,49 @@ uint64_t File::_GetCurrentStripeSize() {
 std::set<Segment> File::_ReconstructVersion(uint32_t version) {
     auto current_version = _version();
     if (version > current_version) {
+        spdlog::warn("The version is higher than the current version.");
         /* The version is higher than the current version. */
         return {};
     }
     if (version != current_version &&
         (_update_record.empty() || _first_image_version > version + 1)) {
+        spdlog::warn("Not enough information to recover the old version.");
         /* Not enough information to recover the old version. */
         return {};
+    }
+    uint64_t target_version_blocks = 0;
+    {
+        auto it = _update_record.find(version);
+        if (it == _update_record.end()) {
+            spdlog::warn("Version not exist.");
+            return {};
+        }
+        target_version_blocks = (it->second.metadata.file_size + _raw_stripe_size - 1) / _raw_stripe_size;
     }
     uint64_t file_size = _GetCurrentStripeSize();
     if (file_size % _block_size) {
         throw std::runtime_error("File size not on block boundary");
     }
-    std::set<Segment> segments{{0, file_size / _block_size, current_version}};
-    uint64_t version_block_size = file_size / _block_size;
+
+    std::set<Segment> segments{{0, target_version_blocks, current_version}};
     for (auto latest_update = _update_record.rbegin();
          latest_update != _update_record.rend() && latest_update->first > version;
          ++latest_update) {
         /* This operation assumes that each update only keeps the file size
          * the same or extends it, but never shrinks. */
         std::optional<std::set<Segment>::iterator> start_remover = std::nullopt;
-        if (latest_update->first - 1 == version) {
-            version_block_size = latest_update->second.stripe_size / _block_size;
+        
+        uint64_t segment_start = std::min(
+            latest_update->second.metadata.stripe_offset,
+            target_version_blocks);
+        uint64_t segment_end = std::min(
+            latest_update->second.metadata.stripe_offset +
+            latest_update->second.metadata.num_stripes,
+            target_version_blocks);
+        if (segment_start >= segment_end) {
+            continue;
         }
-        uint64_t segment_start = latest_update->second.metadata.stripe_offset;
+
         auto start_overlap = segments.lower_bound({segment_start, 0, 0});
         if (start_overlap != segments.begin()) {
             auto to_edit = std::prev(start_overlap);
@@ -320,8 +333,6 @@ std::set<Segment> File::_ReconstructVersion(uint32_t version) {
             }
         }
 
-        uint64_t segment_end = latest_update->second.metadata.stripe_offset +
-                               latest_update->second.metadata.num_stripes;
         auto end_overlap = segments.lower_bound({segment_end, 0, 0});
         if (end_overlap != segments.begin()) {
             auto to_edit = std::prev(end_overlap);
@@ -337,19 +348,6 @@ std::set<Segment> File::_ReconstructVersion(uint32_t version) {
         segments.erase(start_overlap, end_overlap);
         segments.emplace(segment_start, segment_end, latest_update->first - 1);
     }
-
-    auto unused_segment = segments.lower_bound({version_block_size, 0, 0});
-    if (unused_segment != segments.begin()) {
-        auto to_edit = std::prev(unused_segment);
-        auto [prev_start, prev_end, prev_version] = *to_edit;
-        if (prev_end > version_block_size) {
-            if (prev_start != version_block_size) {
-                segments.emplace(prev_start, version_block_size, prev_version);
-            }
-            segments.erase(to_edit);
-        }
-    }
-    segments.erase(unused_segment, segments.end());
     return segments;
 }
 
@@ -366,8 +364,7 @@ bool File::WriteStripes(const UpdateMetadata& metadata, uint32_t block_idx,
         }
     }
     
-    if (!VerifyUpdate(metadata.signature, _public_key, _file_name,
-                      metadata.stripe_offset, metadata.num_stripes, metadata.version, false)) {
+    if (!VerifyUpdate(metadata.signature, _public_key, _file_name, metadata)) {
         spdlog::warn("Version signature verification failed");
         return false;
     }
@@ -394,10 +391,12 @@ bool File::WriteStripes(const UpdateMetadata& metadata, uint32_t block_idx,
 Bytes File::ReadVersion(uint32_t version, uint64_t stripe_offset,
                         uint64_t num_stripes) {
     if (_deleted()) {
+        spdlog::warn("Deleted");
         return {};
     }
     std::set<Segment> segments = _ReconstructVersion(version);
     if (segments.empty()) {
+        spdlog::warn("Empty segment");
         return {};
     }
 
@@ -432,8 +431,16 @@ Bytes File::ReadVersion(uint32_t version, uint64_t stripe_offset,
 }
 
 bool File::Delete(uint32_t version, const Bytes& signature) {
+    UpdateMetadata meta{
+        .version = version,
+        .stripe_offset = 0,
+        .num_stripes = 0,
+        .file_size = 0,
+        .is_delete = true,
+        .signature = signature,
+    };
 #ifndef NO_VERIFY
-    if (!VerifyUpdate(signature, _public_key, _file_name, 0, 0, version, true)) {
+    if (!VerifyUpdate(signature, _public_key, _file_name, meta)) {
         spdlog::warn("Version signature verification failed");
         return false;
     }
@@ -451,14 +458,7 @@ bool File::Delete(uint32_t version, const Bytes& signature) {
         fs::remove(_UndoLogPath(version));
     }
     _update_record.clear();
-    _update_record[new_version] = _CreateUndoRecord(UpdateMetadata{
-        .version = new_version,
-        .stripe_offset = 0,
-        .num_stripes = 0,
-        .file_size = 0,
-        .is_delete = true,
-        .signature = signature,
-    });
+    _update_record[new_version] = _CreateUndoRecord(meta);
     _file_stream.close();
     fs::remove(_FilePath());
     return true;
@@ -468,8 +468,16 @@ bool File::Recreate(uint32_t version, const Bytes& signature) {
     if (!_deleted()) {
         return false;
     }
+    UpdateMetadata meta = {
+        .version = version,
+        .stripe_offset = 0,
+        .num_stripes = 0,
+        .file_size = 0,
+        .is_delete = true,
+        .signature = signature,
+    };
 #ifndef NO_VERIFY
-    if (!VerifyUpdate(signature, _public_key, _file_name, 0, 0, version, false)) {
+    if (!VerifyUpdate(signature, _public_key, _file_name, meta)) {
         throw std::runtime_error("Version signature verification failed");
     }
 #endif
@@ -490,14 +498,7 @@ bool File::Recreate(uint32_t version, const Bytes& signature) {
     }
 
     _update_record.clear();
-    _update_record[new_version] = _CreateUndoRecord(UpdateMetadata{
-        .version = new_version,
-        .stripe_offset = 0,
-        .num_stripes = 0,
-        .file_size = 0,
-        .is_delete = true,
-        .signature = signature,
-    });
+    _update_record[new_version] = _CreateUndoRecord(meta);
     _WriteMetadata();
     return true;
 }

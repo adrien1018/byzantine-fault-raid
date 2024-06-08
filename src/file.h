@@ -10,25 +10,14 @@
 #include <thread>
 #include <fstream>
 
-#include "signature.h"
+#include "encode_decode.h"
 
 using Clock = std::chrono::steady_clock;
 using Segment =
     std::tuple<uint64_t, uint64_t, uint32_t>;  // (start, end, version)
 
-struct UpdateMetadata {
-    uint32_t version;
-    uint64_t stripe_offset;
-    uint64_t num_stripes;
-    uint64_t file_size;
-    bool is_delete;
-    Bytes signature;
-};
-
 struct UndoRecord {
     UpdateMetadata metadata;
-    uint64_t stripe_size; /* The number of stripes in this version times
-                             block_size. */
     bool has_image;
     Bytes old_image;
     Clock::time_point time_to_live;

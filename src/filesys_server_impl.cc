@@ -45,7 +45,7 @@ FilesysImpl::FilesysImpl(
     const Config& config, const fs::path& local_storage, uint32_t server_idx)
         : _config(config),
           _data_storage(local_storage, config.servers.size(), config.block_size,
-                        GetStripeSize(config.block_size, config.servers.size(), config.num_malicious)),
+                        GetStripeSize(config.block_size, config.servers.size(), config.num_faulty)),
           _server_idx(server_idx) {
     for (const auto& file : _data_storage.GetFileList("")) {
         _seen_public_keys.insert(file->PublicKey());
