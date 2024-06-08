@@ -89,6 +89,9 @@ std::vector<GFInt> ComputeEncodeTable(uint8_t N) {
 }
 
 std::vector<GFInt> ComputeDecodeTable(const std::vector<uint8_t>& pos) {
+  static std::vector<uint8_t> cache_pos;
+  static std::vector<GFInt> cache;
+  if (cache_pos == pos) return cache;
   std::vector<GFInt> x(pos.size(), GFInt(1));
   for (uint8_t i = 0; i < pos.size(); i++) {
     for (uint8_t j = 0; j < pos.size(); j++) {
@@ -96,6 +99,8 @@ std::vector<GFInt> ComputeDecodeTable(const std::vector<uint8_t>& pos) {
       x[i] /= GFInt(pos[i]) - GFInt(pos[j]);
     }
   }
+  cache_pos = pos;
+  cache = x;
   return x;
 }
 
