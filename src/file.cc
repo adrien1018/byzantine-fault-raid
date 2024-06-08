@@ -533,6 +533,7 @@ bool File::UpdateUndoLogAndFile(
         }
         _file_stream.seekp(kBasePosition + start * _block_size);
         _file_stream.write((char*)data.data(), data.size());
+        _file_stream.flush();
     }
     return true;
 }

@@ -104,7 +104,7 @@ std::vector<int64_t> MultiReadOrReconstruct(
         size_t num_success = 0;
         for (int i = 0; i < (int)responses.size(); i++) {
           size_t serverId = (i < reconstruct_server || reconstruct_server == -1) ? i : i + 1;
-          if (!encodedBlocks.back()[0][i].empty() || !replied[i] || !responses[i].status.ok()) {
+          if (!encodedBlocks.back()[0][serverId].empty() || !replied[i] || !responses[i].status.ok()) {
             continue;
           }
           auto &reply = responses[i].reply;

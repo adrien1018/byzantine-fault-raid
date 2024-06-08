@@ -71,6 +71,7 @@ Status FilesysImpl::ReadBlocks(ServerContext* context, const ReadBlocksArgs* arg
     spdlog::info("Server {}: Read {}, version={}", _server_idx, args->file_name(), version);
 
     reply->set_version(version);
+    try {
     for (auto& range : args->stripe_ranges()) {
         Bytes block_data = file->ReadVersion(version, range.offset(), range.count());
         if (block_data.empty()) {
@@ -80,6 +81,9 @@ Status FilesysImpl::ReadBlocks(ServerContext* context, const ReadBlocksArgs* arg
         std::string block_data_str =
             std::string(block_data.begin(), block_data.end());
         *reply->add_block_data() = block_data_str;
+    }
+    } catch (std::exception& err) {
+      spdlog::error("Error {}", err.what());
     }
     for (const auto& metadata : file->GetUpdateLog(0)) {
         filesys::UpdateMetadata* update_metadata = reply->add_update_log();
