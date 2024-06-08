@@ -106,6 +106,10 @@ int bfr_open(const char *path, struct fuse_file_info *info) {
     spdlog::info("FUSE open: {}", pathStr);
     const std::optional<FileMetadata> metadata = bfrFs->open(pathStr);
     if (metadata.has_value()) {
+        if (info->flags & O_TRUNC) {
+            if (auto ret = bfrFs->unlink(pathStr); ret < 0) return ret;
+            return bfrFs->create(pathStr);
+        }
         return 0;
     }
     if (info->flags & O_CREAT) {

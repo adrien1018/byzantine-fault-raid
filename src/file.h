@@ -10,11 +10,10 @@
 #include <thread>
 #include <fstream>
 
+#include "segment.h"
 #include "encode_decode.h"
 
 using Clock = std::chrono::steady_clock;
-using Segment =
-    std::tuple<uint64_t, uint64_t, uint32_t>;  // (start, end, version)
 
 struct UndoRecord {
     UpdateMetadata metadata;

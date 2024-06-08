@@ -32,6 +32,9 @@ struct ReadRange {
   char* out;
 };
 
+void ToGRPCUpdateMetadata(filesys::UpdateMetadata& out, const UpdateMetadata& metadata);
+UpdateMetadata ToUpdateMetadata(const filesys::UpdateMetadata& metadata);
+
 // num_malicious & reconstruct_server only used in reconstruction
 std::vector<int64_t> MultiReadOrReconstruct(
     std::vector<filesys::Filesys::Stub*> peers,

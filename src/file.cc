@@ -11,7 +11,7 @@ using namespace std::chrono_literals;
 
 /* Persisting the record on disk. The format is:
     |version (4 bytes)|stripe_offset (8 bytes)|num_stripes (8 bytes)
-    |is_delete (1 byte)|signature (64 bytes)
+    |is_delete (1 byte)|signature (64 bytes)|file_size (8 bytes)
     |metadata (variable size)| */
 
 UndoRecord UndoRecord::ReadFromFile(std::ifstream& ifs) {
@@ -80,7 +80,7 @@ File::File(const std::string& directory, const std::string& file_name,
     };
 #ifndef NO_VERIFY
     if (!VerifyUpdate(version_signature, _public_key, _file_name, meta)) {
-        spdlog::warn("Version signature verification failed");
+        spdlog::error("Version signature verification failed");
         throw std::runtime_error("Version signature verification failed");
     }
 #endif
@@ -291,12 +291,10 @@ std::set<Segment> File::_ReconstructVersion(uint32_t version) {
         return {};
     }
     uint64_t target_version_blocks = 0;
-    {
-        auto it = _update_record.find(version);
-        if (it == _update_record.end()) {
-            spdlog::warn("Version not exist.");
-            return {};
-        }
+    if (auto it = _update_record.find(version); it == _update_record.end()) {
+        spdlog::warn("Version not exist.");
+        return {};
+    } else {
         target_version_blocks = (it->second.metadata.file_size + _raw_stripe_size - 1) / _raw_stripe_size;
     }
     uint64_t file_size = _GetCurrentStripeSize();
@@ -310,7 +308,6 @@ std::set<Segment> File::_ReconstructVersion(uint32_t version) {
          ++latest_update) {
         /* This operation assumes that each update only keeps the file size
          * the same or extends it, but never shrinks. */
-        std::optional<std::set<Segment>::iterator> start_remover = std::nullopt;
         
         uint64_t segment_start = std::min(
             latest_update->second.metadata.stripe_offset,
@@ -322,31 +319,7 @@ std::set<Segment> File::_ReconstructVersion(uint32_t version) {
         if (segment_start >= segment_end) {
             continue;
         }
-
-        auto start_overlap = segments.lower_bound({segment_start, 0, 0});
-        if (start_overlap != segments.begin()) {
-            auto to_edit = std::prev(start_overlap);
-            const auto [prev_start, prev_end, prev_version] = *to_edit;
-            if (prev_end > segment_start) {
-                segments.emplace(prev_start, segment_start, prev_version);
-                start_remover = to_edit;
-            }
-        }
-
-        auto end_overlap = segments.lower_bound({segment_end, 0, 0});
-        if (end_overlap != segments.begin()) {
-            auto to_edit = std::prev(end_overlap);
-            const auto [prev_start, prev_end, prev_version] = *to_edit;
-            if (prev_end > segment_end) {
-                segments.emplace(segment_end, prev_end, prev_version);
-            }
-        }
-
-        if (start_remover.has_value()) {
-            segments.erase(start_remover.value());
-        }
-        segments.erase(start_overlap, end_overlap);
-        segments.emplace(segment_start, segment_end, latest_update->first - 1);
+        UpdateSegments(segments, {segment_start, segment_end, latest_update->first - 1});
     }
     return segments;
 }
@@ -473,11 +446,12 @@ bool File::Recreate(uint32_t version, const Bytes& signature) {
         .stripe_offset = 0,
         .num_stripes = 0,
         .file_size = 0,
-        .is_delete = true,
+        .is_delete = false,
         .signature = signature,
     };
 #ifndef NO_VERIFY
     if (!VerifyUpdate(signature, _public_key, _file_name, meta)) {
+        spdlog::error("Version signature verification failed");
         throw std::runtime_error("Version signature verification failed");
     }
 #endif
@@ -493,7 +467,8 @@ bool File::Recreate(uint32_t version, const Bytes& signature) {
     std::fstream::openmode open_mode = std::fstream::binary | std::fstream::in |
                                        std::fstream::out | std::fstream::trunc;
     _file_stream.open(_FilePath(), open_mode);
-    if (_file_stream.is_open()) {
+    if (!_file_stream.is_open()) {
+        spdlog::error("Failed to open");
         throw std::runtime_error("Failed to open");
     }
 
@@ -567,7 +542,10 @@ std::string File::FileName() const { return _file_name; }
 Bytes File::PublicKey() const { return _public_key.PublicKey(); }
 
 UpdateMetadata File::LastUpdate() const {
-    if (_update_record.empty()) throw std::runtime_error("No update record");
+    if (_update_record.empty()) {
+        spdlog::error("No update record");
+        throw std::runtime_error("No update record");
+    }
     return _update_record.rbegin()->second.metadata;
 }
 

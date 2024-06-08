@@ -1,5 +1,6 @@
 #include "filesys_common.h"
 
+#include "segment.h"
 #include "async_query.h"
 #include "encode_decode.h"
 
@@ -18,7 +19,26 @@ struct RangeMeta {
   }
 };
 
-// change the above function to multiple read
+void ToGRPCUpdateMetadata(filesys::UpdateMetadata& out, const UpdateMetadata& metadata) {
+    out.set_version(metadata.version);
+    out.mutable_stripe_range()->set_offset(metadata.stripe_offset);
+    out.mutable_stripe_range()->set_count(metadata.num_stripes);
+    out.set_file_size(metadata.file_size);
+    out.set_is_delete(metadata.is_delete);
+    out.set_version_signature(BytesToStr(metadata.signature));
+}
+
+UpdateMetadata ToUpdateMetadata(const filesys::UpdateMetadata& metadata) {
+    return UpdateMetadata{
+        .version = metadata.version(),
+        .stripe_offset = metadata.stripe_range().offset(),
+        .num_stripes = metadata.stripe_range().count(),
+        .file_size = metadata.file_size(),
+        .is_delete = metadata.is_delete(),
+        .signature = StrToBytes(metadata.version_signature()),
+    };
+}
+
 std::vector<int64_t> MultiReadOrReconstruct(
     std::vector<filesys::Filesys::Stub*> peers,
     const std::string& filename, size_t file_size,
@@ -71,6 +91,7 @@ std::vector<int64_t> MultiReadOrReconstruct(
   if (reconstruct_server != -1) {
     peers.erase(peers.begin() + reconstruct_server);
   }
+  std::map<uint32_t, UpdateMetadata> update_log;
   QueryServers<filesys::ReadBlocksReply>(
       peers, args, &filesys::Filesys::Stub::AsyncReadBlocks,
       num_servers - num_faulty, 100ms, timeout,
@@ -105,9 +126,35 @@ std::vector<int64_t> MultiReadOrReconstruct(
                   blocks.begin() + ((stripeOffset + 1) * block_size));
             }
           }
+
+          for (auto& update : reply.update_log()) {
+            if (update_log.count(update.version())) continue;
+            if (!VerifyUpdateSignature(update, filename, public_key.PublicKey())) continue;
+            update_log[update.version()] = ToUpdateMetadata(update);
+          }
           if (fail) continue;
           num_success++;
         }
+
+        if (update_log.empty()) {
+          spdlog::error("No valid update log");
+          return false;
+        }
+        uint32_t prev_version = update_log.rbegin()->first;
+        for (auto it = --update_log.end();; --it) {
+          if (prev_version - it->second.version > 1 || it->second.file_size == 0) {
+            update_log.erase(update_log.begin(), it);
+            break;
+          }
+          if (it == update_log.begin()) break;
+          prev_version = it->second.version;
+        }
+        std::set<Segment> segments;
+        for (const auto& [version, metadata] : update_log) {
+          UpdateSegments(segments, {
+              metadata.stripe_offset, metadata.stripe_offset + metadata.num_stripes, version});
+        }
+        // for (auto& i : segments) spdlog::debug("Segment {}", i);
 
         std::vector<int64_t> nret = ret;
         try {
@@ -122,18 +169,24 @@ std::vector<int64_t> MultiReadOrReconstruct(
               //spdlog::debug("{}, {}, {}", stripeOffset,
               //              encodedBlocks.size(), stripe);
               const uint64_t stripeId = startStripeId + stripeOffset;
+              auto update_it = segments.lower_bound({stripeId + 1, 0, 0});
+              if (update_it == segments.begin() || std::get<1>(*--update_it) <= stripeId) {
+                spdlog::error("No valid segment");
+                return false;
+              }
+              uint32_t stripe_version = std::get<2>(*update_it);
               // spdlog::debug("Decode {}, {}, {}, {}, {}, {}, {}, {}",
               //               stripe_size, num_servers, num_faulty,
               //               public_key.PublicKey(), filename, stripeId, version, stripe[0]);
               if (reconstruct_server == -1) {
                 const Bytes decodedStripe = Decode(
                     stripe, stripe_size, num_servers, num_faulty,
-                    public_key, filename, stripeId, version);
+                    public_key, filename, stripeId, stripe_version);
                 memcpy(bytesRead.data() + stripeOffset * stripe_size, decodedStripe.data(), stripe_size);
               } else {
                 const Bytes reconstructedBlock = Reconstruct(
                     stripe, stripe_size, num_servers, num_faulty, num_malicious,
-                    reconstruct_server, public_key, filename, stripeId, version);
+                    reconstruct_server, public_key, filename, stripeId, stripe_version);
                 memcpy(bytesRead.data() + stripeOffset * block_size, reconstructedBlock.data(), block_size);
               }
             }

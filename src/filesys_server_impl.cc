@@ -17,30 +17,6 @@ using grpc::ServerContext;
 using grpc::ServerWriter;
 using grpc::Status;
 
-namespace {
-
-void ToGRPCUpdateMetadata(filesys::UpdateMetadata& out, const UpdateMetadata& metadata) {
-    out.set_version(metadata.version);
-    out.mutable_stripe_range()->set_offset(metadata.stripe_offset);
-    out.mutable_stripe_range()->set_count(metadata.num_stripes);
-    out.set_file_size(metadata.file_size);
-    out.set_is_delete(metadata.is_delete);
-    out.set_version_signature(BytesToStr(metadata.signature));
-}
-
-UpdateMetadata ToUpdateMetadata(const filesys::UpdateMetadata& metadata) {
-    return UpdateMetadata{
-        .version = metadata.version(),
-        .stripe_offset = metadata.stripe_range().offset(),
-        .num_stripes = metadata.stripe_range().count(),
-        .file_size = metadata.file_size(),
-        .is_delete = metadata.is_delete(),
-        .signature = StrToBytes(metadata.version_signature()),
-    };
-}
-
-} // namespace
-
 FilesysImpl::FilesysImpl(
     const Config& config, const fs::path& local_storage, uint32_t server_idx)
         : _config(config),

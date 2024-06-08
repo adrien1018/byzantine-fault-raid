@@ -138,6 +138,7 @@ file(GLOB STORAGE_SRC_FILES
     ${PROJECT_SOURCE_DIR}/src/bytes.*
     ${PROJECT_SOURCE_DIR}/src/data_storage.*
     ${PROJECT_SOURCE_DIR}/src/file.*
+    ${PROJECT_SOURCE_DIR}/src/segment.*
     ${PROJECT_SOURCE_DIR}/src/signature.*
     ${PROJECT_SOURCE_DIR}/src/encode_decode.*
     ${PROJECT_SOURCE_DIR}/src/reed_solomon.*
