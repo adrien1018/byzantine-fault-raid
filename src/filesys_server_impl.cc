@@ -27,14 +27,18 @@ FilesysImpl::FilesysImpl(
         _seen_public_keys.insert(file->PublicKey());
     }
 
+    grpc::ChannelArguments channel_args;
+    constexpr size_t maxSize = 1ll << 30;
+    channel_args.SetMaxReceiveMessageSize(maxSize);
+    channel_args.SetMaxSendMessageSize(maxSize);
     for (uint32_t i = 0; i < config.servers.size(); i++) {
         if (i == server_idx) {
             _peers.emplace_back(nullptr);
             continue;
         }
         const auto address = config.servers[i];
-        std::shared_ptr<Channel> channel = grpc::CreateChannel(
-            address, grpc::InsecureChannelCredentials());
+        std::shared_ptr<Channel> channel = grpc::CreateCustomChannel(
+            address, grpc::InsecureChannelCredentials(), channel_args);
         _peers.emplace_back(Filesys::NewStub(channel).release());
     }
 

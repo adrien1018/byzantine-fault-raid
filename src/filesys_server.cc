@@ -16,11 +16,16 @@ static void RunServer(const std::string& ip_address, uint32_t server_idx,
 
     std::string server_address{ip_address + ":" + std::to_string(port)};
     ServerBuilder builder;
+    constexpr size_t maxSize = 1ll << 30;
+    builder.SetMaxMessageSize(maxSize);
+    builder.SetMaxSendMessageSize(maxSize);
+    builder.SetMaxReceiveMessageSize(maxSize);
     builder.AddListeningPort(server_address, grpc::InsecureServerCredentials());
     builder.RegisterService(&service);
     std::unique_ptr<Server> server(builder.BuildAndStart());
     spdlog::info("Server listening on {}", server_address);
     server->Wait();
+    
 }
 
 int main(int argc, char* argv[]) {

@@ -85,9 +85,13 @@ static uint64_t roundUp(const uint64_t numToRound, const uint64_t multiple) {
 }
 
 BFRFileSystem::BFRFileSystem(const Config& config, const std::string& signing_key_path) {
+    grpc::ChannelArguments channel_args;
+    constexpr size_t maxSize = 1ll << 30;
+    channel_args.SetMaxReceiveMessageSize(maxSize);
+    channel_args.SetMaxSendMessageSize(maxSize);
     for (const std::string &address : config.servers) {
         std::shared_ptr<Channel> channel =
-            CreateChannel(address, InsecureChannelCredentials());
+            CreateCustomChannel(address, InsecureChannelCredentials(), channel_args);
         servers_.emplace_back(Filesys::NewStub(channel));
     }
     numServers_ = config.servers.size();

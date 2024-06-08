@@ -315,69 +315,30 @@ int main(int argc, char **argv) {
         return fuse_main(fuse_argc, (char**)fuse_argv, &bfr_filesystem_operations, nullptr);
     } else {
         auto prefix = bfrFs->GetPrefix();
-
-        std::vector<std::string> files{"a.txt", "b.txt", "c.txt"};
-        for (auto& i : files) i = prefix + i;
-
-        bfrFs->create(files[index]);
+        auto filename = prefix + "a";
+        spdlog::set_level(spdlog::level::err);
 
         std::mt19937_64 gen;
-        using mrand = std::uniform_int_distribution<int>;
+        for (int block_size : {1, 1 << 16, 1 << 20, 1 << 24, 1 << 26}) {
+            std::vector<uint8_t> data(block_size);
+            std::vector<uint8_t> read_data(block_size);
+            for (int i = 0; i < block_size; i++) data[i] = gen();
 
-        bool deleted = false;
-        const int write_size = 1000;
-        char buf[write_size] = {};
-        std::string last_wrote;
-        for (int i = 0; i < 300; i++) {
-            int op = gen() % 4;
-            spdlog::debug("op: {}", op);
-            switch (op) {
-                case 0: {
-                    auto file_list = bfrFs->getFileList();
-                    for (const auto &file_name : file_list) {
-                        assert(std::find(files.begin(), files.end(), file_name) != files.end());
-                    }
-                } break;
-                case 1: {
-                    std::memset(buf, 0, sizeof(buf));
-                    int file_index = rand() % files.size();
-                    int start = mrand(0, 1000)(gen);
-                    int end = mrand(0, 1000)(gen);
-                    if (start > end) std::swap(start, end);
-                    bool ret = bfrFs->read(files[file_index], buf, end - start, start);
-                    if (file_index == index) {
-                        if (last_wrote.empty()) {
-                            assert(!ret);
-                        } else {
-                            if (!(ret && std::string(buf, buf + (end - start)) == last_wrote.substr(start, end - start))) {
-                                spdlog::error("Wrote: {}", last_wrote.substr(start, end - start));
-                                spdlog::error("Read: {}", std::string(buf, buf + (end - start)));
-                                assert(false);
-                            }
-                        }
-                    }
-                } break;
-                case 2: {
-                    if (deleted) {
-                        bfrFs->create(files[index]);
-                        deleted = false;
-                    }
-                    for (int i = 0; i < write_size; i++) {
-                        buf[i] = mrand('a', 'z')(gen);
-                    }
-                    bfrFs->write(files[index], (char*)buf, write_size, 0);
-                    last_wrote = std::string(buf, buf + write_size);
-                    //spdlog::debug("Wrote: {}", last_wrote);
-                } break;
-                case 3: {
-                    if (deleted) {
-                        bfrFs->create(files[index]);
-                        deleted = false;
-                    } else {
-                        // bfrFs->unlink(files[index]);
-                        // deleted = true;
-                    }
-                } break;
+            using namespace std::chrono;
+            for (int i = 0; i < 5; i++) {
+                bfrFs->create(filename);
+                auto start = steady_clock::now();
+                bfrFs->write(filename, (char*)data.data(), block_size, 0);
+                auto end = steady_clock::now();
+                std::cout << "Write " << block_size << " " << duration_cast<microseconds>(end - start).count() << std::endl;
+
+                start = steady_clock::now();
+                bfrFs->read(filename, (char*)read_data.data(), block_size, 0);
+                end = steady_clock::now();
+                assert(data == read_data);
+                std::cout << "Read " << block_size << " " << duration_cast<microseconds>(end - start).count() << std::endl;
+
+                bfrFs->unlink(filename);
             }
         }
     }
